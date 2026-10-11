@@ -34,3 +34,25 @@ def test_zero_day_is_implausible_but_a_clean_day_is_not():
 def test_feed_outage_when_fewer_than_half_report():
     assert checks.feed_outage(30, 80)
     assert not checks.feed_outage(60, 80)
+
+from pathlib import Path
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def load(name):
+    df = pd.read_csv(FIXTURES / name)
+    return pd.Series(df["pm25"].values, index=pd.to_datetime(df["time"], utc=True))
+
+
+def test_real_incident_bang_sue_sep_2023_is_flagged():
+    # Air4Thai Bang Sue reported exactly 15.0 for most of September 2023 (data-findings, Finding 2)
+    s = load("bang_sue_frozen_2023-09.csv")
+    flagged = checks.stuck_mask(s)
+    assert flagged.any(), "the real Bang Sue freeze was not detected"
+    assert (s[flagged] == 15.0).all(), "flagged hours should be the frozen 15.0 readings"
+
+
+def test_healthy_station_same_period_is_not_flagged():
+    s = load("din_daeng_healthy_2023-09.csv")
+    assert not checks.stuck_mask(s).any()
