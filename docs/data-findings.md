@@ -113,3 +113,34 @@ Average PM2.5 across all stations, by month (µg/m³):
 - Confirm that the 0.0 days belong to the NESDC station.
 - Check whether Air4Thai's own feed can serve as a backup during OpenAQ outages,
   and under what terms.
+
+## Finding 4 — choosing N for the stuck check
+
+`explore/hourly_runs.py`: runs of identical consecutive hourly readings. A run breaks
+when the value changes or an hour is missing.
+
+Healthy stations (Din Dang, Lumpini, Bang Phlat, Thai Meteorological Dept, Chatuchak,
+Khlong Toei, Odeon Circus, Nong Chok — all of 2024, ~48,000 hours, 43,123 runs):
+
+| Run length | Count |
+|---|---|
+| ≥ 3 h | 754 |
+| ≥ 4 h | 153 |
+| ≥ 5 h | 22 |
+| ≥ 6 h | 4 |
+| ≥ 8 h | **0** |
+
+99th percentile 3 h · 99.9th percentile 4 h · longest 7 h.
+
+Known frozen episodes:
+- Mahaisawan, Jun 2024 — longest run **110 h**.
+- Bang Sue, Sep 2023 — longest run **14 h** (then 13, 11, 10, 9): the freeze is split
+  by missing hours, which restart the count.
+
+**Decision: N = 8 hours.** One hour above the longest healthy run, below every fragment
+of the Bang Sue freeze. N = 6 would give ~4 false alarms per 8 stations per year
+(~40/year across all stations).
+
+Caveat: based on 8 stations × 1 year. To validate on all 83 stations when the pipeline
+is built; raise to N = 10 if any healthy station exceeds 7 h.
+Possible improvement: join runs across 1–2 h gaps so a gappy freeze counts as one run.
