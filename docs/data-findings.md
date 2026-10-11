@@ -144,3 +144,29 @@ of the Bang Sue freeze. N = 6 would give ~4 false alarms per 8 stations per year
 Caveat: based on 8 stations × 1 year. To validate on all 83 stations when the pipeline
 is built; raise to N = 10 if any healthy station exceeds 7 h.
 Possible improvement: join runs across 1–2 h gaps so a gappy freeze counts as one run.
+
+## Finding 5 — weather inputs (Open-Meteo)
+
+Source: **Previous Runs API** (`previous-runs-api.open-meteo.com`), central Bangkok
+(13.7563, 100.5018), hourly, 2024-01-01 to 2026-10-10 (24,336 hours). CC BY 4.0.
+
+- Variables ending in `_previous_day1` are the forecast made **24 h before** the valid
+  time — what the 01:00 job actually has. Plain variables are close to the actual weather.
+- **Not** the Historical Forecast API: it stitches the first hours of each model run, so
+  its values are near-actual weather, and training on them would leak.
+- Day-ahead archive starts **January 2024** → the training window is 2024-01 onward.
+
+Day-ahead forecast error (mean absolute):
+
+| Variable | Error |
+|---|---|
+| temperature_2m | 1.08 °C |
+| relative_humidity_2m | 6.39 pts |
+| wind_speed_10m | 2.62 km/h |
+
+This is the size of the leak a model would get if trained on actual weather.
+
+- **1.9 %** of hours have no day-ahead forecast. The job needs a rule for a missing
+  weather input (fallback to `_previous_day2`, or forecast without weather and flag it).
+- Known limitation: for late hours of the target day, the run 24 h earlier may not be
+  published by 01:00. `_previous_day2` is the strictly safe alternative.
