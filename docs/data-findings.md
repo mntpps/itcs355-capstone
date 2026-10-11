@@ -170,3 +170,27 @@ This is the size of the leak a model would get if trained on actual weather.
   weather input (fallback to `_previous_day2`, or forecast without weather and flag it).
 - Known limitation: for late hours of the target day, the run 24 h earlier may not be
   published by 01:00. `_previous_day2` is the strictly safe alternative.
+
+## Finding 6 — the baseline to beat (persistence)
+
+`explore/baseline.py`: predict each station's day D as its value on day D−1.
+2024-01-01 onward, data rules applied (frozen days, values < 1 removed, weak stations dropped),
+only true consecutive days. 62,780 station-days.
+
+| Metric | Persistence |
+|---|---|
+| MAE, all | 4.05 µg/m³ |
+| MAE, dry season (Nov–Apr) | 5.35 |
+| MAE, rainy season (May–Oct) | 2.49 |
+| RMSE | 5.85 |
+| Unhealthy days (> 37.5) caught | 70.3 % |
+| False alarms among its warnings | 29.5 % |
+| Unhealthy days missed (onsets) | 2,627 of 8,849 |
+
+- Persistence is strong on average; it fails exactly at **onsets** — the day pollution
+  jumps from fine to unhealthy — which is when users most need a warning.
+- Proposed evaluation gate: **onset recall** as the main metric, with dry-season MAE
+  ≤ persistence and a cap on false alarms as guard rails.
+- Station-days are not independent (all stations rise together on smoggy days):
+  effectively ~1,000 distinct days. Use that when judging whether a gain is real.
+- 37.5 µg/m³ threshold: to verify against the current PCD bands.
