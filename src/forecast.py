@@ -10,10 +10,13 @@ import pandas as pd
 TARGET_MODES = ("level", "delta")
 
 
-def predict(model, rows: pd.DataFrame, target_mode: str) -> np.ndarray:
+def predict(model, rows: pd.DataFrame, target_mode: str, shrink: float = 1.0) -> np.ndarray:
+    """shrink scales the predicted change: 0 = persistence, 1 = the model's full change."""
     if target_mode not in TARGET_MODES:
         raise ValueError(f"target_mode must be one of {TARGET_MODES}, got {target_mode!r}")
     out = model.predict(rows[list(model.feature_names_in_)])
     if target_mode == "delta":
-        out = out + rows["lag1"].to_numpy()
+        out = rows["lag1"].to_numpy() + shrink * out
+    elif shrink != 1.0:
+        raise ValueError("shrink only applies to target_mode='delta'")
     return np.clip(out, 0, None)          # PM2.5 cannot be negative

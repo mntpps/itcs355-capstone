@@ -214,3 +214,17 @@ Consequences:
   stuck_mask only catches the flat part, so the day of and the day before a stuck run are dropped.
 - OpenAQ's daily averages (used for Finding 6) are smoothed over about two days, so the old
   persistence baseline is optimistic and must be recomputed on the new target.
+
+## Finding 8 — Weather inputs drift between years; removed from the model
+
+- With weather inputs, every model over-predicted validation by about +4 µg/m³, even the
+  delta model (bias +4.1). Without weather: bias +0.94, false alarms 25.4% (persistence
+  27.0%), recall 75.7% (73.7%). Only MAE still fails (6.42 vs 6.14).
+- Same months, different years, very different forecast weather: Jan–Mar north–south wind
+  5.34 (2024) → 0.88 (2025) → 1.74 (2026); humidity 70.7 → 65.1 → 60.4 (explore/feature_shift.py).
+- Training contains one dry season (Jan–Apr 2024). Tree models cannot extrapolate to weather
+  they never saw.
+- Open: real climate difference (early 2024 was an unusually hot El Niño period) or a change
+  in Open-Meteo's forecast product? Test: compare each year's forecasts against reanalysis.
+- Decision: the model runs without weather. Weather stays a monitored input (drift signal)
+  and returns as a candidate once three or more dry seasons exist.

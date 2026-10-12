@@ -28,6 +28,12 @@ from sklearn.ensemble import HistGradientBoostingRegressor
 from src import config, evaluate, features, forecast, seeds, split
 
 SEASON = ["doy_sin", "doy_cos"]
+FEATURE_SETS = {
+    "all": features.FEATURES,
+    "no_season": [f for f in features.FEATURES if f not in SEASON],
+    "no_weather": [f for f in features.FEATURES if f not in features.WEATHER],
+    "pm_only": ["lag1", "lag2", "lag3", "mean7", "city_lag1", "city_n"],
+}
 
 
 def git(*args: str) -> str:
@@ -55,7 +61,7 @@ def data_version(path: Path) -> str:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--target-mode", choices=forecast.TARGET_MODES, default="level")
-    p.add_argument("--features", choices=["all", "no_season"], default="all")
+    p.add_argument("--features", choices=list(FEATURE_SETS), default="all")
     p.add_argument("--learning-rate", type=float, default=0.05)
     p.add_argument("--max-iter", type=int, default=400)
     p.add_argument("--max-leaf-nodes", type=int, default=31)
@@ -67,28 +73,32 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--metrics-out", type=Path, default=Path("reports/metrics.json"))
     p.add_argument("--enforce-gate", action="store_true",
                    help="exit 1 if the gate fails (the pipeline uses this; the study does not)")
+    p.add_argument("--loss", choices=["squared_error", "absolute_error"], default="squared_error")
+    p.add_argument("--shrink", type=float, default=1.0,
+                    help="delta mode: forecast = yesterday + shrink * predicted change")
     return p.parse_args()
 
 
 def fit(rows: pd.DataFrame, cols: list[str], args, seed: int):
     target = rows["y"] - rows["lag1"] if args.target_mode == "delta" else rows["y"]
     model = HistGradientBoostingRegressor(
+        loss=args.loss,
         learning_rate=args.learning_rate, max_iter=args.max_iter,
         max_leaf_nodes=args.max_leaf_nodes, min_samples_leaf=args.min_samples_leaf,
         l2_regularization=args.l2, random_state=seed)
     return model.fit(rows[cols], target)
 
 
-def score(model, rows: pd.DataFrame, target_mode: str) -> tuple[dict, dict]:
+def score(model, rows: pd.DataFrame, target_mode: str, shrink: float) -> tuple[dict, dict]:
     month = rows["date"].dt.month.values
-    pred = forecast.predict(model, rows, target_mode)
+    pred = forecast.predict(model, rows, target_mode, shrink)
     m = evaluate.metrics(rows["y"].values, pred, rows["lag1"].values, month)
     base = evaluate.metrics(rows["y"].values, rows["lag1"].values, rows["lag1"].values, month)
     return m, base
 
 
-def save_model(model, path: Path, target_mode: str) -> None:
-    meta = {"target_mode": target_mode}
+def save_model(model, path: Path, target_mode: str, shrink: float) -> None:
+    meta = {"target_mode": target_mode, "shrink": shrink}
     try:
         from skops.io import dumps, get_untrusted_types
         trusted = get_untrusted_types(data=dumps(model))   # our own model's types
@@ -109,12 +119,11 @@ def main() -> int:
     df = df[df["y"].notna()].copy()
     df["split"] = split.assign(df["date"]).values
     train, val, test = (df[df["split"] == k] for k in ("train", "val", "test"))
-    cols = [f for f in features.FEATURES if not (args.features == "no_season" and f in SEASON)]
-
+    cols = FEATURE_SETS[args.features]
     m_val = fit(train, cols, args, seed)
-    val_m, val_base = score(m_val, val, args.target_mode)
+    val_m, val_base = score(m_val, val, args.target_mode, args.shrink)
     m_final = fit(pd.concat([train, val]), cols, args, seed)
-    test_m, test_base = score(m_final, test, args.target_mode)
+    test_m, test_base = score(m_final, test, args.target_mode, args.shrink)
     val_checks = evaluate.gate(val_m, val_base)
     checks = evaluate.gate(test_m, test_base)
     passed = all(checks.values())
@@ -139,7 +148,7 @@ def main() -> int:
                           ("test_", test_m), ("test_persist_", test_base)]:
             mlflow.log_metrics({prefix + k: v for k, v in d.items()})
         with tempfile.TemporaryDirectory() as tmp:
-            save_model(m_final, Path(tmp) / "model", args.target_mode)
+            save_model(m_final, Path(tmp) / "model", args.target_mode, args.shrink)
             mlflow.log_artifacts(str(Path(tmp) / "model"), artifact_path="model")
         run_id = run.info.run_id
 
@@ -155,6 +164,7 @@ def main() -> int:
     args.metrics_out.parent.mkdir(parents=True, exist_ok=True)
     args.metrics_out.write_text(json.dumps({
         "run_id": run_id, "gate_passed": passed, "gate_checks": checks,
+        "params": {k: str(v) for k, v in vars(args).items()},
         "val": val_m, "val_persistence": val_base, "test": test_m, "test_persistence": test_base,
     }, indent=2))
     return 1 if (args.enforce_gate and not passed) else 0

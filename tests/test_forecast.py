@@ -33,3 +33,11 @@ def test_never_negative():
 def test_unknown_mode_is_rejected():
     with pytest.raises(ValueError):
         forecast.predict(Constant(0.0), ROWS, "levels")
+
+
+def test_shrink_zero_is_exactly_persistence():
+    assert list(forecast.predict(Constant(5.0), ROWS, "delta", shrink=0.0)) == [10.0, 20.0]
+
+
+def test_shrink_scales_the_predicted_change():
+    assert list(forecast.predict(Constant(2.0), ROWS, "delta", shrink=0.5)) == [11.0, 21.0]
