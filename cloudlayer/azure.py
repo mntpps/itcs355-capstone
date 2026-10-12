@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
 from azure.ai.ml import MLClient, Input, Output, command
-from azure.ai.ml.entities import Environment, UserIdentityConfiguration
+from azure.ai.ml.entities import Environment, ManagedIdentityConfiguration, UserIdentityConfiguration
 
 from cloudlayer.base import CloudAdapter
 
@@ -212,6 +212,7 @@ class AzureAdapter(CloudAdapter):
                                     name=str(args.get("environment_name", "itcs355-lab2-env"))),
             environment_variables={k: str(v) for k, v in dict(args.get("env", {})).items()},
             compute=str(args.get("compute", "itcs3556688020-cpu")),
+            identity=ManagedIdentityConfiguration(),
             inputs=inputs,
             **extra,
         )

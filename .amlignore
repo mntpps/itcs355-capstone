@@ -1,0 +1,20 @@
+# Azure ML uses this INSTEAD of .gitignore when uploading the code snapshot.
+cloud.env
+.env
+.venv/
+.git/
+.dvc/cache/
+.dvc/tmp/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+data/hourly/
+data/daily/
+data/*.csv
+mlruns/
+mlartifacts/
+mlflow.db
+models/
+reports/study/
+job_logs/
+explore/

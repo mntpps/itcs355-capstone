@@ -38,6 +38,18 @@ A model is used only if, against persistence ("tomorrow = today") on the same ro
 lower MAE, lower dry-season MAE, recall on days > 37.5 µg/m³ at least as high, and a
 false-alarm rate no higher (`src/evaluate.py`). If nothing passes, persistence stays in service.
 
+## Identities (least privilege)
+
+| Identity | Can do | Role and scope | Why it is needed |
+|---|---|---|---|
+| Training cluster (`itcs3556688020-cpu`, system-assigned managed identity) | Pull the training image | `AcrPull` on the container registry only | Jobs run the image by digest; read-only, cannot push or delete |
+| | Read the versioned data | `Storage Blob Data Reader` on the storage account only | Job inputs are DVC objects addressed by md5; training never writes data |
+
+Evidence: before `AcrPull` was granted, the first job failed with "Failed to pull Docker image … could
+not authenticate with the Docker registry" (job `gray_lizard_1nk701bx42`). The registry's admin
+password was deliberately not enabled: one shared credential with full access is the opposite of
+least privilege. A scheduled run uses this identity, not the developer's login.
+
 ## How to run *(coming)*
 
 ## Deployment *(coming)*
