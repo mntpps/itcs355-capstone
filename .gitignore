@@ -16,4 +16,5 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .ruff_cache/
-reports/study/job_logs/
+reports/study/
+job_logs/
