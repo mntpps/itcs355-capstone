@@ -17,6 +17,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import os
 from pathlib import Path
 
 import mlflow
@@ -135,8 +136,10 @@ def main() -> int:
                               if k not in ("metrics_out", "enforce_gate", "experiment", "run_name")},
                            "seed": seed, "n_features": len(cols)})
         mlflow.set_tags({
-            "git_commit": git("rev-parse", "HEAD"),
-            "git_uncommitted_changes": str(bool(git("status", "--porcelain"))),
+            "git_commit": os.environ.get("GIT_COMMIT") or git("rev-parse", "HEAD"),
+            "git_uncommitted_changes": os.environ.get("GIT_DIRTY") or str(bool(git("status", "--porcelain"))),
+            "training_job_id": os.environ.get("AZUREML_RUN_ID", "local"),
+            "image_digest": os.environ.get("IMAGE_DIGEST", "local"),
             "data_version_targets": data_version(cfg.targets_path),
             "data_version_weather": data_version(cfg.weather_daily_path),
             "split": "val 2024-11-01..2025-04-30 | test 2025-10-01..2026-09-30 | gap 7d",

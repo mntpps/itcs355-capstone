@@ -24,14 +24,16 @@ ENV PYTHONUNBUFFERED=1 \
 
 COPY --from=builder /install /usr/local
 WORKDIR /app
-RUN mkdir -p /app/data/raw /app/mlruns /app/reports && chown -R runner:runner /app
+# capstone: data, reports and models folders the training run writes to
+RUN mkdir -p /app/data /app/reports /app/models && chown -R runner:runner /app
 COPY --chown=runner:runner src/ ./src/
 COPY --chown=runner:runner cloudlayer/ ./cloudlayer/
 COPY --chown=runner:runner scripts/ ./scripts/
+# capstone: the station list is part of the code (versioned in git), not the data
+COPY --chown=runner:runner config/ ./config/
 
 USER runner
 
-# Credentials NEVER enter an image layer. They arrive at runtime from SECRET_STORE_PATH
-# or from the platform's identity. If you find yourself adding an ARG for a key, stop.
+# Credentials NEVER enter an image layer. They arrive at runtime from the platform's identity.
 ENTRYPOINT ["python", "-m", "src.train"]
-CMD ["--n-estimators", "200", "--max-depth", "8"]
+# capstone: no default arguments; the selected configuration is passed explicitly
