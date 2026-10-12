@@ -41,15 +41,18 @@ def main() -> None:
         sys.exit("Commit first: the job must train from a commit that exists.")
     commit = git("rev-parse", "HEAD")
 
-    command = ("mkdir -p data && cp ${{inputs.targets}} data/targets.csv && "
-               "cp ${{inputs.weather}} data/weather_daily.csv && "
-               f"python -m src.train {SELECTED} --experiment pm25-capstone --enforce-gate")
+    command = ("mkdir -p $DATA_DIR && cp data/*.dvc $DATA_DIR/ && "
+               "cp ${{inputs.targets}} $DATA_DIR/targets.csv && "
+               "cp ${{inputs.weather}} $DATA_DIR/weather_daily.csv && "
+               f"python -m src.train {SELECTED} --experiment pm25-capstone --enforce-gate "
+               "--metrics-out /tmp/metrics.json")
 
     adapter = get_adapter(config.load())
     job_id = adapter.submit_training(args.image, {
         "inputs": {"targets": dvc_key("data/targets.csv.dvc"),
                    "weather": dvc_key("data/weather_daily.csv.dvc")},
-        "env": {"GIT_COMMIT": commit, "GIT_DIRTY": "False", "IMAGE_DIGEST": args.image},
+        "env": {"GIT_COMMIT": commit, "GIT_DIRTY": "False", "IMAGE_DIGEST": args.image,
+                "DATA_DIR": "/tmp/pm25data"},
         "command": command,
         "experiment": "pm25-capstone",
         "display_name": "pm25-study17",
