@@ -1,0 +1,6 @@
+[core]
+    remote = storage
+    analytics = false
+['remote "storage"']
+    url = azure://itcs355/capstone/dvc
+    account_name = itcs3556688020

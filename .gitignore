@@ -1,9 +1,10 @@
 .venv/
 .env
 cloud.env
-data/*
-!data/*.dvc
-!data/.gitignore
+data/daily/
+data/coverage.csv
+data/pm25_daily.csv
+*.tmp
 models/
 mlruns/
 mlartifacts/

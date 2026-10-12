@@ -1,0 +1,5 @@
+outs:
+- md5: 567d621fcc9dc5bdf767cad3003a7d52
+  size: 105265
+  hash: md5
+  path: weather_daily.csv

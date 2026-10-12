@@ -1,0 +1,5 @@
+outs:
+- md5: be90aaa3009a2f43be28ed6fab6e4176
+  size: 1659909
+  hash: md5
+  path: weather_hourly.csv

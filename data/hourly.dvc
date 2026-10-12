@@ -1,0 +1,6 @@
+outs:
+- md5: 8615d2e038779ab2471c55c3ecc50f58.dir
+  size: 37703330
+  nfiles: 2754
+  hash: md5
+  path: hourly
