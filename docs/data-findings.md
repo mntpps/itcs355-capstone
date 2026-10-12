@@ -194,3 +194,23 @@ only true consecutive days. 62,780 station-days.
 - Station-days are not independent (all stations rise together on smoggy days):
   effectively ~1,000 distinct days. Use that when judging whether a gain is real.
 - 37.5 µg/m³ threshold: to verify against the current PCD bands.
+
+## Finding 7 — "Hourly" PM2.5 is a 24-hour moving average
+
+Air4Thai's hourly values (via OpenAQ) are the average of the previous 24 hours, not hourly
+measurements. Evidence (explore/check_rolling.py, 81 stations, 2024-01 to 2026-10):
+- hour-to-hour change: median 0.20, p95 1.20 µg/m³; day-to-day: median 2.70, p95 12.65 (13× larger)
+- correlation between consecutive hours: 0.994
+- no daily cycle, even in the dry season: Jan–Feb swing 2% (37.7 at 11h to 38.3 at 01h)
+- a single day slides smoothly (station 135, 2025-01-15: 58.4 → 50.2)
+Consistent with PCD reporting PM2.5 as a 24-h moving average for its AQI.
+
+Consequences:
+- Target = the end-of-day reading (23:00), which is PCD's own 24-h average for that day.
+  Averaging the 24 readings would blend each day with the previous one.
+- The partial-day completeness test (explore/partial_day_error.py) is invalid on this data:
+  neighbouring hours are near-copies, so deleting hours barely moves the average.
+- A frozen sensor first appears as a 24-h slide toward the frozen value, then a flat line.
+  stuck_mask only catches the flat part, so the day of and the day before a stuck run are dropped.
+- OpenAQ's daily averages (used for Finding 6) are smoothed over about two days, so the old
+  persistence baseline is optimistic and must be recomputed on the new target.
