@@ -183,41 +183,38 @@ class AzureAdapter(CloudAdapter):
             workspace_name=workspace,
         )
 
+    def _wasbs(self, key: str) -> str:
+        """A path under BLOB_URI, in the form Azure ML job inputs expect."""
+        account_url, container, prefix = self._blob_parts()
+        host = account_url.split("://", 1)[1]
+        path = "/".join(p for p in (prefix, key) if p)
+        return f"wasbs://{container}@{host}/{path}"
+
     def submit_training(self, image_uri: str, args: dict[str, object]) -> str:
-        """Submit an Azure ML command job for Lab 2."""
+        """Submit an Azure ML command job. Inputs are keys under BLOB_URI."""
         ml_client = self._ml_client()
 
-        input_uri = str(args.get("input_uri", self.cfg.blob_uri))
-        output_uri = str(args["output_uri"])
-        compute = str(args.get("compute", "itcs3556688020-cpu"))
-        experiment_name = str(args.get("experiment", "itcs355-lab2"))
+        inputs = {name: Input(type="uri_file", path=self._wasbs(key), mode="download")
+                  for name, key in dict(args.get("inputs", {})).items()}
+        if "input_uri" in args:                       # Lab 2 form, kept working
+            inputs["data"] = Input(type="uri_file", path=str(args["input_uri"]), mode="download")
+        extra = {}
+        if "output_uri" in args:
+            extra["outputs"] = {"artifacts": Output(type="uri_folder",
+                                                    path=str(args["output_uri"]), mode="rw_mount")}
 
         job = command(
-            display_name="itcs355-lab2-training",
-            experiment_name=experiment_name,
+            display_name=str(args.get("display_name", "itcs355-training")),
+            experiment_name=str(args.get("experiment", "itcs355-lab2")),
             code=".",
             command=str(args["command"]),
-            environment=Environment(
-                image=image_uri,
-                name="itcs355-lab2-env",
-            ),
-            compute=compute,
-            inputs={
-                "data": Input(
-                    type="uri_file",
-                    path=input_uri,
-                    mode="download",
-                )
-            },
-            outputs={
-                "artifacts": Output(
-                    type="uri_folder",
-                    path=output_uri,
-                    mode="rw_mount",
-                )
-            },
+            environment=Environment(image=image_uri,
+                                    name=str(args.get("environment_name", "itcs355-lab2-env"))),
+            environment_variables={k: str(v) for k, v in dict(args.get("env", {})).items()},
+            compute=str(args.get("compute", "itcs3556688020-cpu")),
+            inputs=inputs,
+            **extra,
         )
-
         created = ml_client.jobs.create_or_update(job)
         return created.name
 
