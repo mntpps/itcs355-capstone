@@ -51,6 +51,14 @@ not authenticate with the Docker registry" (job `gray_lizard_1nk701bx42`). The r
 password was deliberately not enabled: one shared credential with full access is the opposite of
 least privilege. A scheduled run uses this identity, not the developer's login.
 
+## Promotion (staging → production)
+
+- **Staging:** `scripts/register.py` registers a version only if the run passed the gate and has complete lineage; it is tagged `stage: staging`. The registry holds *candidates*.
+- **Production:** the version that serves is whatever `config/production.json` names. That file is the single source of truth.
+- **How to promote:** `python scripts/promote.py --version N --reason "..."` refuses versions without full lineage or not in staging, then rewrites the file. The change reaches production only by a merged pull request (first promotion: PR #1).
+- **Who may promote:** anyone may open the PR; merging is the approval. Here the single author approves; in a team, branch protection would require a second reviewer and passing CI.
+- **Rollback:** revert the promotion commit. `previous_version` in the file records what to fall back to.
+
 ## How to run *(coming)*
 
 ## Deployment *(coming)*
