@@ -1,0 +1,10 @@
+{
+  "model": "pm25-forecast",
+  "version": 1,
+  "previous_version": null,
+  "mlflow_run_id": "bright_seal_wsd8hyrstg",
+  "git_commit": "2182393839f4a167f7f3b773ab6521b4fe416e6c",
+  "metric_val": 5.889,
+  "metric_test": 3.976,
+  "reason": "First production model: study-17 passed the gate on validation and test"
+}
