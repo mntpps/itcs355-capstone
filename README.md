@@ -23,7 +23,8 @@ the lowest validation MAE among trials passing all four gate checks on validatio
 2024–25 dry season). The top validation score (k = 0.5, MAE 5.843) was not chosen: it
 missed the recall check by 0.3 points. Three trials passed the gate on the test year but not
 on validation; none were chosen, since selecting on test would make the test meaningless.
-**Seed variance:** zero; the model has no randomness, verified with a second seed.
+**Seed variance:** not zero. With more than 10,000 training rows, scikit-learn's `HistGradientBoostingRegressor` turns on early stopping automatically, and the seed chooses its random 10% hold-out. Five seeds of study-17 (20260101, 1–4) give val MAE 5.901 ± 0.028 (range 5.877–5.946) and test MAE 3.964 ± 0.009 (3.952–3.976); all five pass both gates. The worst seed still beats persistence (val 6.14, test 4.12), so the improvement is not seed luck. The registered seed (20260101) was fixed before the study.
+**How narrow the selection was:** study-17 was the only trial to pass the validation gate. study-18 (k=0.5) had lower val MAE (5.843 vs 5.889) but recall 0.734, just below persistence's 0.737; study-17's 0.739 passed by 0.002. Both margins are within seed noise, so the choice between them is narrow. study-17 passed the gate with all five seeds. The rule (best val MAE among gate-passers) and the seed were fixed before the study, and we did not re-run study-18 under other seeds to change the outcome — that would be selecting on results. Cost of the choice: lower onset recall (0.075 vs 0.121), i.e. slower to catch the first day of an episode.
 **Cost:** a full fit takes about a minute on a laptop; monthly retraining cost is in the
 cost report. **How this could be wrong:** the margin over persistence is small (MAE −4%,
 recall +0.2 points), validation covers one dry season, and station-days are correlated,
