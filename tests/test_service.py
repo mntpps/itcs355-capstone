@@ -85,3 +85,9 @@ def test_failed_load_stays_alive_but_not_ready():
         r = c.get("/ready")
         assert r.status_code == 503 and "registry unreachable" in r.json()["error"]
         assert c.get("/health").status_code == 200
+
+
+def test_responses_name_the_revision_that_served_them(client, monkeypatch):
+    monkeypatch.setenv("CONTAINER_APP_REVISION", "itcs-forecast--m1-abc")
+    assert client.post("/predict", json={"station_id": "135"}).json()["revision"] == "itcs-forecast--m1-abc"
+    assert client.get("/ready").json()["revision"] == "itcs-forecast--m1-abc"

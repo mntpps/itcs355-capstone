@@ -36,11 +36,6 @@ def az(*args, check=True):
     return json.loads(r.stdout) if r.stdout.strip() else None
 
 
-def git_sha() -> str:
-    return subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True,
-                          text=True, check=True).stdout.strip()
-
-
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", required=True, help="registry/repo@sha256:... (a digest, never a tag)")
@@ -52,7 +47,8 @@ def main() -> int:
     config.load()
     rg = os.environ["PROJECT_ID"]
     version = json.loads((REPO_ROOT / "config" / "production.json").read_text())["version"]
-    suffix = f"m{version}-{git_sha()}"
+    digest = args.image.split("@sha256:")[1]
+    suffix = f"m{version}-{digest[:7]}-{time.strftime('%m%d%H%M')}"  # model, image, deploy time
 
     ident = az("identity", "show", "-g", rg, "-n", IDENTITY)
     env = az("containerapp", "env", "show", "-g", rg, "-n", ENVIRONMENT)

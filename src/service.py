@@ -144,7 +144,9 @@ def create_app(loader: Callable[[], Loaded] = load_production, background: bool 
                 "last_observation_date": str(last_obs),
                 "data_age_days": (today - last_obs).days,
                 "stations": len(m.rows),
-                "data_version": m.data_version}
+                "data_version": m.data_version,
+                "revision": os.environ.get("CONTAINER_APP_REVISION", "local"),
+                "image": os.environ.get("IMAGE_DIGEST", "local")}
 
     @app.post("/predict")
     def predict(req: PredictRequest):
@@ -152,7 +154,8 @@ def create_app(loader: Callable[[], Loaded] = load_production, background: bool 
         if req.station_id not in m.rows.index:
             raise HTTPException(404, detail=f"unknown station_id {req.station_id!r}")
         return {**_forecast(m, [req.station_id])[0],
-                "model": m.model_name, "model_version": m.model_version}
+                "model": m.model_name, "model_version": m.model_version,
+                "revision": os.environ.get("CONTAINER_APP_REVISION", "local")}
 
     @app.post("/predict/batch")
     def predict_batch(req: BatchRequest):
@@ -160,6 +163,7 @@ def create_app(loader: Callable[[], Loaded] = load_production, background: bool 
         ids = list(m.rows.index) if req.station_ids is None else list(dict.fromkeys(req.station_ids))
         known = [s for s in ids if s in m.rows.index]
         return {"model": m.model_name, "model_version": m.model_version,
+                "revision": os.environ.get("CONTAINER_APP_REVISION", "local"),
                 "forecast_date": f"{m.forecast_date:%Y-%m-%d}",
                 "forecasts": _forecast(m, known) if known else [],
                 "unknown_station_ids": [s for s in ids if s not in m.rows.index]}
