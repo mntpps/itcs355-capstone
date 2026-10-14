@@ -25,8 +25,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from src import config, features, forecast
+from src import config, data_source, features, forecast
 from src.evaluate import THRESHOLD
+
+import logging
+import os
+import tempfile
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION = REPO_ROOT / "config" / "production.json"
@@ -42,6 +46,7 @@ class Loaded:
     model_version: str
     rows: pd.DataFrame          # one feature row per station for forecast_date; index = station id (str)
     forecast_date: pd.Timestamp
+    data_version: str = "unknown"
 
 
 def load_production() -> Loaded:
@@ -60,13 +65,16 @@ def load_production() -> Loaded:
         model = mlflow.sklearn.load_model(str(mlmodel.parent))
         meta = mlflow.models.Model.load(str(mlmodel)).metadata or {}
 
+    blob_uri = os.environ.get("BLOB_URI")
+    versions = {p.name: data_source.ensure(p, blob_uri)
+                for p in (cfg.targets_path, cfg.weather_daily_path)}
     df = features.build(pd.read_csv(cfg.targets_path), pd.read_csv(cfg.weather_daily_path),
                         pd.read_csv(cfg.stations_path))
     day = df["date"].max()
     rows = df[df["date"] == day].copy()
     rows.index = rows["location_id"].astype(str)
     return Loaded(model, meta["target_mode"], float(meta.get("shrink", 1.0)),
-                  name, version, rows, day)
+                  name, version, rows, day, versions["targets.csv"])
 
 
 class PredictRequest(BaseModel):
@@ -135,7 +143,8 @@ def create_app(loader: Callable[[], Loaded] = load_production, background: bool 
                 "forecast_date": f"{m.forecast_date:%Y-%m-%d}",
                 "last_observation_date": str(last_obs),
                 "data_age_days": (today - last_obs).days,
-                "stations": len(m.rows)}
+                "stations": len(m.rows),
+                "data_version": m.data_version}
 
     @app.post("/predict")
     def predict(req: PredictRequest):
