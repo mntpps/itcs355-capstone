@@ -31,9 +31,17 @@ COPY --chown=runner:runner cloudlayer/ ./cloudlayer/
 COPY --chown=runner:runner scripts/ ./scripts/
 # capstone: the station list is part of the code (versioned in git), not the data
 COPY --chown=runner:runner config/ ./config/
+# capstone: the DVC pointers (md5 only, no data) say which data version the service downloads
+COPY --chown=runner:runner data/*.dvc ./data/
 
 USER runner
 
+# Writable by the non-root user; the service downloads the pointed-to data here at startup.
+ENV DATA_DIR=/tmp/pm25data
+
 # Credentials NEVER enter an image layer. They arrive at runtime from the platform's identity.
-ENTRYPOINT ["python", "-m", "src.train"]
-# capstone: no default arguments; the selected configuration is passed explicitly
+# One image, two uses:
+#   serving  -> this default command
+#   training -> Azure ML replaces it with the job's command (scripts/train_remote.py)
+EXPOSE 8000
+CMD ["uvicorn", "src.service:app", "--host", "0.0.0.0", "--port", "8000"]
