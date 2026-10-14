@@ -10,3 +10,5 @@ azure-storage-blob
 azure-identity
 azure-ai-ml
 azureml-mlflow==1.62.0.post6
+fastapi
+uvicorn
