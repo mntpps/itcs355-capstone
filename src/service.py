@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import tempfile
 import threading
 import time
@@ -29,9 +30,6 @@ from pydantic import BaseModel, Field
 from src import config, data_source, features, forecast
 from src.evaluate import THRESHOLD
 
-import logging
-import os
-import tempfile
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION = REPO_ROOT / "config" / "production.json"

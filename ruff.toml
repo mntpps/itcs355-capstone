@@ -10,5 +10,10 @@
 # deliberately, in a commit that also fixes what it flags.
 line-length = 100
 
+# capstone: explore/ holds one-off data-investigation scripts (see docs/data-findings.md).
+# They are not imported by training or serving and never enter the image, so they are
+# not linted.
+extend-exclude = ["explore"]
+
 [lint]
 select = ["E4", "E7", "E9", "F"]

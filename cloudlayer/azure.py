@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
 from azure.ai.ml import MLClient, Input, Output, command
-from azure.ai.ml.entities import Environment, ManagedIdentityConfiguration, UserIdentityConfiguration
+from azure.ai.ml.entities import Environment, ManagedIdentityConfiguration
 
 from cloudlayer.base import CloudAdapter
 
