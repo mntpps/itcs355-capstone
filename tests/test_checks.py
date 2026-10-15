@@ -1,5 +1,6 @@
 import pandas as pd
 from src import checks
+from pathlib import Path
 
 
 def hours(values, start="2024-01-01 00:00"):
@@ -35,7 +36,6 @@ def test_feed_outage_when_fewer_than_half_report():
     assert checks.feed_outage(30, 80)
     assert not checks.feed_outage(60, 80)
 
-from pathlib import Path
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
