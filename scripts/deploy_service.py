@@ -1,6 +1,7 @@
 """Deploy the forecast service to Azure Container Apps BY IMAGE DIGEST, as a new revision.
 
     python scripts/deploy_service.py --image itcs3556688020.azurecr.io/itcs355@sha256:...
+    python scripts/deploy_service.py --image ...@sha256:... --canary 10   # new revision gets 10%
 
 Settings come from cloud.env (it holds no secrets). The service logs in with the
 user-assigned managed identity itcs3556688020-serve, so no credentials are passed.
@@ -40,6 +41,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", required=True, help="registry/repo@sha256:... (a digest, never a tag)")
     ap.add_argument("--min-replicas", type=int, default=0)
+    ap.add_argument("--canary", type=int, metavar="PERCENT",
+                    help="new revision gets only this share; the current stable revision keeps the rest")
     args = ap.parse_args()
     if "@sha256:" not in args.image:
         sys.exit("refusing: deploy by digest (…@sha256:…), not by tag")
@@ -52,6 +55,24 @@ def main() -> int:
 
     ident = az("identity", "show", "-g", rg, "-n", IDENTITY)
     env = az("containerapp", "env", "show", "-g", rg, "-n", ENVIRONMENT)
+    url = (f"https://management.azure.com/subscriptions/{os.environ['AZURE_SUBSCRIPTION_ID']}"
+           f"/resourceGroups/{rg}/providers/Microsoft.App/containerApps/{APP}?api-version=2024-03-01")
+
+    # Traffic split is part of the SAME request that creates the revision, so there is never
+    # a moment where 100% of users hit an untested revision.
+    traffic = [{"latestRevision": True, "weight": 100}]
+    if args.canary is not None:
+        if not 0 < args.canary < 100:
+            sys.exit("--canary must be between 1 and 99")
+        current = az("rest", "--method", "get", "--url", url, check=False)
+        if current is None:
+            sys.exit("--canary needs an existing app with a stable revision")
+        top = max(current["properties"]["configuration"]["ingress"]["traffic"], key=lambda t: t["weight"])
+        stable = top.get("revisionName") or current["properties"]["latestReadyRevisionName"]
+        traffic = [{"revisionName": stable, "weight": 100 - args.canary},
+                   {"latestRevision": True, "weight": args.canary}]
+        print(f"canary: {args.canary}% to the new revision, {100 - args.canary}% stays on {stable}")
+
     settings = [{"name": k, "value": os.environ[k]} for k in SETTINGS if os.environ.get(k)]
     settings += [{"name": "AZURE_CLIENT_ID", "value": ident["clientId"]},
                  {"name": "IMAGE_DIGEST", "value": args.image}]
@@ -64,7 +85,7 @@ def main() -> int:
             "configuration": {
                 "activeRevisionsMode": "Multiple",
                 "ingress": {"external": True, "targetPort": 8000, "transport": "auto",
-                            "traffic": [{"latestRevision": True, "weight": 100}]},
+                            "traffic": traffic},
                 "registries": [{"server": args.image.split("/")[0], "identity": ident["id"]}],
             },
             "template": {
@@ -89,13 +110,11 @@ def main() -> int:
         },
     }
 
-    url = (f"https://management.azure.com/subscriptions/{os.environ['AZURE_SUBSCRIPTION_ID']}"
-           f"/resourceGroups/{rg}/providers/Microsoft.App/containerApps/{APP}?api-version=2024-03-01")
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump(spec, f)
     print(f"deploying {APP}, revision {APP}--{suffix}")
-    # PUT the whole definition: create-or-update, declarative. (The preview containerapp CLI
-    # extension sends a malformed request for --yaml, so we call the API directly.)
+    # PUT the whole definition: create-or-update, declarative. We call the ARM API directly
+    # (az rest) so the deploy doesn't depend on the preview containerapp CLI extension.
     az("rest", "--method", "put", "--url", url, "--body", f"@{f.name}")
     os.unlink(f.name)
 
