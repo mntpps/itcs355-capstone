@@ -67,4 +67,11 @@ least privilege. A scheduled run uses this identity, not the developer's login.
 
 ## Deliberate failure: frozen sensor *(coming)*
 
-## Cost *(coming)*
+## Serving cost
+
+From `scripts/cost_serving.py` (Azure Retail Prices API, Container Apps Consumption, southeastasia; replica 0.5 vCPU / 1 GiB; throughput 39.3 req/s from the load test) — full table in `reports/cost-serving.md`:
+
+- **1,000 predictions: ~$0.0009.** The work itself is nearly free.
+- **What costs money is replicas existing:** one wake-up from zero ≈ $0.0063 (the replica stays for the 300 s cooldown); one replica kept warm all day ≈ $0.52 (~$15.50/month) even with zero requests.
+- **Decision: scale to zero by default.** The forecast changes once a day and traffic is light; the monthly free grant covers ~100 active replica-hours, so realistic use costs ~$0. Trade-off: a 20–40 s cold start for the first request after a quiet period. `minReplicas 1` only for load tests and the live demo.
+- **Lesson learned:** `minReplicas` belongs to a *revision*. A revision kept warm for the load test kept a replica running after traffic moved away, until it was explicitly deactivated.
