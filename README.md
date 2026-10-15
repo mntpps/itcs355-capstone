@@ -85,3 +85,20 @@ From `scripts/cost_serving.py` (Azure Retail Prices API, Container Apps Consumpt
   - Good candidate `488ae00` (structured logging): 0 errors, p95 73 ms, 39/39 forecasts identical → **promoted** (`reports/canary-m1-488ae00-10151536.md`).
   - Bad candidate `aa288ab` (branch `demo/bad-canary`, never merged: `shrink` not passed to `forecast.predict`): 0 errors, p95 75 ms — looked perfect — but **0/54 forecasts matched** → **rolled back in 14.8 s** (`reports/canary-m1-aa288ab-10151621.md`).
 - **Defence in depth:** the same bug fails 3 unit tests (safety net 1: tests/CI before merge); the canary is safety net 2, in production, for what tests miss.
+
+
+## CI (`.github/workflows/ci.yml`)
+
+Every pull request to `main`, and every push to `main`, runs three checks:
+
+- **secret-scan** — gitleaks over the **whole history** (`fetch-depth: 0`): a key deleted later is still in old commits.
+- **lint-test** — installs the hashed lock (`pip install --require-hashes`), `ruff check` (rules pinned in `ruff.toml`), `pytest`.
+- **build** — `docker build`, only after lint-test passes.
+
+The job token is read-only (`permissions: contents: read`).
+
+**Deliberately bad PRs, both caught by the responsible check and closed unmerged:**
+- PR #3 — a private key committed: **secret-scan failed**. A first attempt with an obviously fake key ("demo", "fake") was *not* flagged — gitleaks ignores placeholders — so the test was redone with a real-format throwaway key that was never registered anywhere. A check is only trusted after it has been seen to fail.
+- PR #4 — `shrink` not passed to `forecast.predict`: **lint-test failed** (3 tests), build skipped.
+
+**Enforcement:** ruleset `protect-main` requires a PR and all three checks, with no bypass. GitHub enforces rulesets on private repositories only on paid plans, so enforcement is pending the GitHub Student Developer Pack; until then the rule is followed by practice.
