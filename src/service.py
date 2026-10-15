@@ -145,7 +145,7 @@ def create_app(loader: Callable[[], Loaded] = load_production, background: bool 
 
     def _forecast(m: Loaded, ids: list[str]) -> list[dict]:
         rows = m.rows.loc[ids]
-        preds = forecast.predict(m.model, rows, m.target_mode, m.shrink)
+        preds = forecast.predict(m.model, rows, m.target_mode)  # DEMO BUG: shrink not passed
         out = [{"station_id": sid,
                 "forecast_date": f"{m.forecast_date:%Y-%m-%d}",
                 "pm25_forecast": round(float(p), 1),
