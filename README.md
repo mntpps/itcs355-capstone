@@ -75,3 +75,13 @@ From `scripts/cost_serving.py` (Azure Retail Prices API, Container Apps Consumpt
 - **What costs money is replicas existing:** one wake-up from zero ≈ $0.0063 (the replica stays for the 300 s cooldown); one replica kept warm all day ≈ $0.52 (~$15.50/month) even with zero requests.
 - **Decision: scale to zero by default.** The forecast changes once a day and traffic is light; the monthly free grant covers ~100 active replica-hours, so realistic use costs ~$0. Trade-off: a 20–40 s cold start for the first request after a quiet period. `minReplicas 1` only for load tests and the live demo.
 - **Lesson learned:** `minReplicas` belongs to a *revision*. A revision kept warm for the load test kept a replica running after traffic moved away, until it was explicitly deactivated.
+
+## Deployment and canary
+
+- **Deploy by digest** (`scripts/deploy_service.py`): one image for training and serving; refuses tags. Azure Container Apps (standard, ConsumptionOnly environment — the new *express* default cannot run two revisions, so it cannot canary). Revision name = model version + image digest + deploy time.
+- **Canary**: `--canary 10` creates the new revision with 10% of traffic *in the same request*, so no user ever sees an untested revision at 100%.
+- **Decision by written rule** (`scripts/canary.py`): promote only if the candidate served ≥ 20 requests, its error rate ≤ stable's, its p95 ≤ 500 ms, and — for the same model version — it returns **exactly the same forecast for every station**. Otherwise roll back. Errors that cannot be attributed to a revision count against the candidate. Latency is checked against the absolute target, not against stable: at 90/10 the stable revision queues more and always looks slower.
+- **Evidence:**
+  - Good candidate `488ae00` (structured logging): 0 errors, p95 73 ms, 39/39 forecasts identical → **promoted** (`reports/canary-m1-488ae00-10151536.md`).
+  - Bad candidate `aa288ab` (branch `demo/bad-canary`, never merged: `shrink` not passed to `forecast.predict`): 0 errors, p95 75 ms — looked perfect — but **0/54 forecasts matched** → **rolled back in 14.8 s** (`reports/canary-m1-aa288ab-10151621.md`).
+- **Defence in depth:** the same bug fails 3 unit tests (safety net 1: tests/CI before merge); the canary is safety net 2, in production, for what tests miss.
