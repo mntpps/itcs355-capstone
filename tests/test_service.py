@@ -1,3 +1,4 @@
+import json
 import threading
 import time
 
@@ -91,3 +92,29 @@ def test_responses_name_the_revision_that_served_them(client, monkeypatch):
     monkeypatch.setenv("CONTAINER_APP_REVISION", "itcs-forecast--m1-abc")
     assert client.post("/predict", json={"station_id": "135"}).json()["revision"] == "itcs-forecast--m1-abc"
     assert client.get("/ready").json()["revision"] == "itcs-forecast--m1-abc"
+
+
+def _events(out: str) -> list[dict]:
+    return [json.loads(line) for line in out.splitlines() if line.startswith("{")]
+
+
+def test_requests_and_predictions_are_logged_as_json(client, capsys):
+    client.post("/predict", json={"station_id": "135"})
+    events = _events(capsys.readouterr().out)
+    req = [e for e in events if e["event"] == "request"][-1]
+    assert req["path"] == "/predict" and req["status"] == 200 and req["latency_ms"] >= 0
+    pred = [e for e in events if e["event"] == "prediction"][-1]
+    assert pred["station_id"] == "135" and pred["pm25_forecast"] == 21.0
+
+
+def test_probes_are_not_logged_but_carry_the_revision_header(client, capsys, monkeypatch):
+    monkeypatch.setenv("CONTAINER_APP_REVISION", "app--m1-x")
+    assert client.get("/ready").headers["x-revision"] == "app--m1-x"
+    client.get("/health")
+    assert not [e for e in _events(capsys.readouterr().out) if e["event"] == "request"]
+
+
+def test_errors_carry_the_revision_header_too(client, monkeypatch):
+    monkeypatch.setenv("CONTAINER_APP_REVISION", "app--m1-x")
+    r = client.post("/predict", json={"station_id": "999"})
+    assert r.status_code == 404 and r.headers["x-revision"] == "app--m1-x"
