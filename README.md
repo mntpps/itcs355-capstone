@@ -87,6 +87,35 @@ From `scripts/cost_serving.py` (Azure Retail Prices API, Container Apps Consumpt
 - **Defence in depth:** the same bug fails 3 unit tests (safety net 1: tests/CI before merge); the canary is safety net 2, in production, for what tests miss.
 
 
+## Calling the service
+
+Base URL: `https://itcs3556688020-forecast.agreeableforest-9e3a5ae0.southeastasia.azurecontainerapps.io`
+(scales to zero: the first request after a quiet period takes ~20–40 s while the model loads).
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /health` | process alive (liveness) |
+| `GET /ready` | model + data loaded (readiness): model version, data version, data age, revision, image |
+| `POST /predict` | `{"station_id": "135"}` → tomorrow's PM2.5 for one station |
+| `POST /predict/batch` | `{"station_ids": ["135", "200"]}`, or `{}` for every station |
+
+```bash
+curl -s https://<base-url>/ready
+curl -s -X POST https://<base-url>/predict -H "Content-Type: application/json" -d '{"station_id":"135"}'
+```
+
+Example response:
+
+```json
+{"station_id": "135", "forecast_date": "2026-10-12", "pm25_forecast": 15.9, "yesterday_pm25": 15.4,
+ "unhealthy": false, "threshold": 37.5, "model": "pm25-forecast", "model_version": "1",
+ "revision": "itcs3556688020-forecast--m1-488ae00-10151536"}
+```
+
+Unknown station → 404; malformed body → 422; model not loaded yet → 503. Every response carries an `x-revision` header.
+Interactive docs: `/docs`.
+
+
 ## CI (`.github/workflows/ci.yml`)
 
 Every pull request to `main`, and every push to `main`, runs three checks:
