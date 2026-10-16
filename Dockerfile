@@ -33,6 +33,8 @@ COPY --chown=runner:runner scripts/ ./scripts/
 COPY --chown=runner:runner config/ ./config/
 # capstone: the DVC pointers (md5 only, no data) say which data version the service downloads
 COPY --chown=runner:runner data/*.dvc ./data/
+# capstone: recorded incidents (small CSVs) so the monitor can replay them in the cloud
+COPY --chown=runner:runner tests/fixtures/ ./tests/fixtures/
 
 USER runner
 
