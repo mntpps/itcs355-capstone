@@ -131,3 +131,74 @@ The job token is read-only (`permissions: contents: read`).
 - PR #4 — `shrink` not passed to `forecast.predict`: **lint-test failed** (3 tests), build skipped.
 
 **Enforcement:** ruleset `protect-main` requires a PR and all three checks, with no bypass. GitHub enforces rulesets on private repositories only on paid plans, so enforcement is pending the GitHub Student Developer Pack; until then the rule is followed by practice.
+
+## Monitoring
+
+### What is checked (`src/monitor.py`)
+
+Thresholds reuse `src/checks.py`; each is tied to a finding in `docs/data-findings.md`.
+
+| Check | Fires when | Severity |
+|---|---|---|
+| `stale_data` | the data behind today's forecast is more than 1 day old (from `/ready`) | critical |
+| `feed_outage` | fewer than half the stations reported in the last 3 h (Finding 1) | critical |
+| `stuck_sensor` | a station's **latest** reading ends a run of ≥ 8 identical hours (Finding 4: longest healthy run 7 h) | warning |
+| `service_unreachable` / `service_not_ready` | `/ready` cannot be reached, or does not return 200 | critical |
+
+One owner per problem: a station that stopped reporting is a `feed_outage`, not a `stuck_sensor`, so one failure never raises three alerts.
+
+### How it runs
+
+- `scripts/monitor_run.py` runs as an hourly **Azure Container Apps Job** `itcs3556688020-monitor` (cron `5 * * * *` UTC), using the same image as the service. Each run fetches the last 48 h for all 81 stations from OpenAQ (about 4 min, within the API rate limit), calls `/ready`, and writes **one JSON line per finding**.
+- **Exit code 0 means the monitor ran**, with or without findings. A *failed execution* means the monitor itself broke. These are two different alarms, kept apart.
+- `--replay <csv>` feeds a recorded incident through the same check; its findings are labelled `mode = replay`.
+
+### Secrets and identity
+
+The OpenAQ key lives in **Key Vault** `itcs3556688020-kv` (entered in the portal, never in a terminal, file or script). The job definition holds only a reference to it. The job runs as `itcs3556688020-monitor`, which can do exactly two things:
+
+| Identity | Roles |
+|---|---|
+| training cluster | AcrPull (registry), Storage Blob Data Reader (storage) |
+| `itcs3556688020-serve` | AcrPull, Storage Blob Data Reader, AzureML Data Scientist (workspace) |
+| `itcs3556688020-monitor` | AcrPull, **Key Vault Secrets User on the single secret `openaq-api-key`** |
+
+### Alerting
+
+JSON findings → Log Analytics (`workspace-itcs3556688020DG3A`) → log alert `pm25-monitor-finding` (every 15 min over a 2-hour window, split by check, severity and mode) → action group `pm25-oncall` → email. Created by `scripts/create_alerts.py`; the recipient comes from `cloud.env` and is not committed.
+The alert is **stateful**: one email when a finding appears and one when it clears. The 2-hour window is longer than the hourly cadence plus ingestion delay, so the alert does not flap between runs.
+
+Querying findings (workspace → Logs):
+
+```kusto
+ContainerAppConsoleLogs_CL
+| where Log_s startswith "{"
+| extend e = parse_json(Log_s)
+| where e.event == "finding"
+| project TimeGenerated, check = tostring(e.check), severity = tostring(e.severity),
+          mode = tostring(e.mode), message = tostring(e.message)
+```
+
+### Evidence (2026-10-16)
+
+- **First live run, a true positive:** `stale_data` critical, *"forecast uses data 5 days old"*. The service still used the Oct 11 snapshot. Alert email at 21:02. Fix: the daily data refresh.
+- **Frozen-sensor demo:** the real Bang Sue freeze (Sep 2023, stuck at 15.0) replayed in the cloud at 21:17. `stuck_sensor`, `mode = replay`, alert email at 21:32: **about 15 min from finding to email**.
+- **The first cloud replay failed** (`FileNotFoundError`: the recorded incident was not in the image). It was diagnosed from the job's logs in Log Analytics and fixed by adding `tests/fixtures/` to the image; the replay then succeeded.
+
+
+### Service-level objectives (targets)
+
+| SLO | Target | Why |
+|---|---|---|
+| Availability | ≥ 99% of `/predict` requests return a non-5xx response, over 7 days | users of a daily forecast tolerate rare retries, not outages |
+| Latency | ≥ 95% of `/predict` requests complete in ≤ 500 ms | the load-test target; met at concurrency ≤ 10 |
+| Freshness | the forecast's data is ≤ 1 day old in ≥ 99% of hours | a forecast from stale data is silently wrong |
+| Detection | data problems are alerted within 30 min of the monitor run that finds them | measured at ~15 min in the replay |
+
+Freshness is **currently violated** (the data is 5 days old) until the daily refresh is in place. The SLO is stated before it is met, not adjusted to fit.
+
+### Not yet wired
+
+- `model_vs_persistence` needs recent forecasts and actuals, which requires the daily refresh.
+- No alert yet on **failed monitor executions** (a broken monitor would currently go unnoticed).
+- Email subjects are the same for every check; one rule per check would put the problem in the subject line.
