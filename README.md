@@ -63,8 +63,6 @@ least privilege. A scheduled run uses this identity, not the developer's login.
 
 ## Deployment *(coming)*
 
-## Monitoring and alerts *(coming)*
-
 ## Deliberate failure: frozen sensor *(coming)*
 
 ## Serving cost
