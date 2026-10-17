@@ -65,14 +65,18 @@ def backfill(start: str, end: str, force: frozenset = frozenset()) -> None:
 
 # ---------- build ----------
 
+def hourly_series(df: pd.DataFrame) -> pd.Series:
+    """Downloaded rows (time_utc, pm25) -> hourly series. Shared by build and refresh."""
+    df = df.drop_duplicates("time_utc")
+    return pd.Series(df["pm25"].values,
+                     index=pd.DatetimeIndex(pd.to_datetime(df["time_utc"], utc=True)))
+
+
 def load_hourly(location_id: int) -> pd.Series:
     files = sorted((HOURLY / str(location_id)).glob("*.csv"))
     if not files:
         return pd.Series(dtype=float)
-    df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
-    df = df.drop_duplicates("time_utc")
-    return pd.Series(df["pm25"].values,
-                     index=pd.DatetimeIndex(pd.to_datetime(df["time_utc"], utc=True)))
+    return hourly_series(pd.concat([pd.read_csv(f) for f in files], ignore_index=True))
 
 
 def build_targets() -> pd.DataFrame:
