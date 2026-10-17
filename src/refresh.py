@@ -81,7 +81,9 @@ def recent_targets(stations: pd.DataFrame, start: pd.Timestamp, end: pd.Timestam
             continue                    # silent station: the monitor reports it as an outage
         t = target.daily_target(ingest.hourly_series(df))
         t.insert(0, "location_id", s.location_id)
-        parts.append(in_window(t, start, end))
+        t = in_window(t, start, end)
+        if not t.empty:                 # skip empty frames (pandas deprecates concatenating them)
+            parts.append(t)
     cols = ["location_id", "date"]
     out = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=cols)
     return out, failed
