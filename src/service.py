@@ -6,6 +6,12 @@ features and forecasts with the SAME code as training (src.features, src.forecas
 Callers send only station ids, so serving can never compute features differently
 from training (no training/serving skew).
 
+Data: the version named in the serving manifest written by the daily refresh
+(src/refresh.py), or the committed DVC pointers if there is no manifest yet. A
+background check re-reads the manifest every DATA_CHECK_SECONDS (default 3600)
+and, when the version changed, rebuilds the feature rows and swaps them in. The
+model is never reloaded by this check.
+
     uvicorn src.service:app --port 8000
 """
 from __future__ import annotations
@@ -17,7 +23,7 @@ import tempfile
 import threading
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -33,6 +39,7 @@ from src.evaluate import THRESHOLD
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION = REPO_ROOT / "config" / "production.json"
+DATA_FILES = ("targets.csv", "weather_daily.csv")
 log = logging.getLogger("pm25.service")
 
 
@@ -45,7 +52,25 @@ class Loaded:
     model_version: str
     rows: pd.DataFrame          # one feature row per station for forecast_date; index = station id (str)
     forecast_date: pd.Timestamp
-    data_version: str = "unknown"
+    data_version: str = "unknown"       # md5 of targets.csv
+    weather_version: str = "unknown"    # md5 of weather_daily.csv
+    data_from: str = "pointer"          # "manifest" (daily refresh) or "pointer" (committed .dvc)
+
+
+def load_data(cfg, blob_uri: str | None, want: dict | None = None, source: str = "pointer") -> dict:
+    """Make sure the serving files hold version `want`, then build the latest feature rows."""
+    if want is None:
+        want, source = data_source.serving_versions(DATA_FILES, blob_uri)
+    paths = {"targets.csv": cfg.targets_path, "weather_daily.csv": cfg.weather_daily_path}
+    for n in DATA_FILES:
+        data_source.ensure(paths[n], blob_uri, want=want[n])
+    df = features.build(pd.read_csv(cfg.targets_path), pd.read_csv(cfg.weather_daily_path),
+                        pd.read_csv(cfg.stations_path))
+    day = df["date"].max()
+    rows = df[df["date"] == day].copy()
+    rows.index = rows["location_id"].astype(str)
+    return {"rows": rows, "forecast_date": day, "data_version": want["targets.csv"],
+            "weather_version": want["weather_daily.csv"], "data_from": source}
 
 
 def load_production() -> Loaded:
@@ -64,16 +89,19 @@ def load_production() -> Loaded:
         model = mlflow.sklearn.load_model(str(mlmodel.parent))
         meta = mlflow.models.Model.load(str(mlmodel)).metadata or {}
 
+    data = load_data(cfg, os.environ.get("BLOB_URI"))
+    return Loaded(model, meta["target_mode"], float(meta.get("shrink", 1.0)), name, version, **data)
+
+
+def check_data(m: Loaded) -> Loaded | None:
+    """New data if the manifest names a different version than `m` serves, else None."""
     blob_uri = os.environ.get("BLOB_URI")
-    versions = {p.name: data_source.ensure(p, blob_uri)
-                for p in (cfg.targets_path, cfg.weather_daily_path)}
-    df = features.build(pd.read_csv(cfg.targets_path), pd.read_csv(cfg.weather_daily_path),
-                        pd.read_csv(cfg.stations_path))
-    day = df["date"].max()
-    rows = df[df["date"] == day].copy()
-    rows.index = rows["location_id"].astype(str)
-    return Loaded(model, meta["target_mode"], float(meta.get("shrink", 1.0)),
-                  name, version, rows, day, versions["targets.csv"])
+    if not blob_uri:
+        return None                     # local run: data/ only changes when you change it
+    want, source = data_source.serving_versions(DATA_FILES, blob_uri)
+    if (want["targets.csv"], want["weather_daily.csv"]) == (m.data_version, m.weather_version):
+        return None
+    return replace(m, **load_data(config.load(), blob_uri, want, source))
 
 
 class PredictRequest(BaseModel):
@@ -95,31 +123,66 @@ def emit(event: str, **fields) -> None:
                       "event": event, **fields}), flush=True)
 
 
-def create_app(loader: Callable[[], Loaded] = load_production, background: bool = True) -> FastAPI:
-    """loader is injectable so tests can use a fake model without Azure."""
-    state: dict = {"loaded": None, "error": None}
+def create_app(loader: Callable[[], Loaded] = load_production, background: bool = True,
+               data_check: Callable[[Loaded], Loaded | None] | None = check_data,
+               check_every: float | None = None) -> FastAPI:
+    """loader and data_check are injectable so tests can use fakes without Azure."""
+    state: dict = {"loaded": None, "error": None, "data_error": None}
+    if check_every is None:
+        check_every = float(os.environ.get("DATA_CHECK_SECONDS", "3600"))
 
     def _load() -> None:
         t0 = time.perf_counter()
         try:
             m = loader()
             state["loaded"] = m
-            log.warning("ready: %s v%s, forecast_date %s, %d stations, loaded in %.1fs",
+            log.warning("ready: %s v%s, forecast_date %s, %d stations, data from %s, loaded in %.1fs",
                         m.model_name, m.model_version, f"{m.forecast_date:%Y-%m-%d}",
-                        len(m.rows), time.perf_counter() - t0)
+                        len(m.rows), m.data_from, time.perf_counter() - t0)
         except Exception as exc:  # reported through /ready; the process stays up but gets no traffic
             state["error"] = f"{type(exc).__name__}: {exc}"
             log.exception("model load failed")
+
+    def _check() -> bool:
+        """One data check. True if new data was swapped in. A failure keeps serving the old data."""
+        m = state["loaded"]
+        if m is None or data_check is None:
+            return False
+        try:
+            new = data_check(m)
+        except Exception as exc:  # old data stays; the freshness monitor will notice
+            state["data_error"] = f"{type(exc).__name__}: {exc}"
+            log.exception("data check failed")
+            emit("data_reload_failed", error=state["data_error"], revision=_revision())
+            return False
+        state["data_error"] = None
+        if new is None:
+            return False
+        state["loaded"] = new           # one assignment: a request sees all old or all new rows
+        emit("data_reload", data_from=new.data_from,
+             old_data_version=m.data_version, new_data_version=new.data_version,
+             old_forecast_date=f"{m.forecast_date:%Y-%m-%d}",
+             new_forecast_date=f"{new.forecast_date:%Y-%m-%d}",
+             stations=len(new.rows), revision=_revision())
+        return True
+
+    def _watch() -> None:
+        while True:
+            time.sleep(check_every)
+            _check()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         if background:   # /health answers immediately; /ready turns 200 when loading finishes
             threading.Thread(target=_load, daemon=True).start()
+            if data_check is not None and check_every > 0:
+                threading.Thread(target=_watch, daemon=True).start()
         else:
             _load()
         yield
 
     app = FastAPI(title="Bangkok PM2.5 next-day forecast", lifespan=lifespan)
+    app.state.check_data_now = _check   # tests (and a future admin hook) can run one check
 
     @app.middleware("http")
     async def log_and_tag(request, call_next):
@@ -156,7 +219,7 @@ def create_app(loader: Callable[[], Loaded] = load_production, background: bool 
         for o in out:
             emit("prediction", station_id=o["station_id"], forecast_date=o["forecast_date"],
                  pm25_forecast=o["pm25_forecast"], yesterday_pm25=o["yesterday_pm25"],
-                 model_version=m.model_version, revision=_revision())
+                 model_version=m.model_version, data_version=m.data_version, revision=_revision())
         return out
 
     @app.get("/health")
@@ -176,6 +239,8 @@ def create_app(loader: Callable[[], Loaded] = load_production, background: bool 
                 "data_age_days": (today - last_obs).days,
                 "stations": len(m.rows),
                 "data_version": m.data_version,
+                "data_from": m.data_from,
+                "data_check_error": state["data_error"],
                 "revision": _revision(),
                 "image": os.environ.get("IMAGE_DIGEST", "local")}
 

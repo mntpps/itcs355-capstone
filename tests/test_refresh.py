@@ -49,7 +49,12 @@ def _hours(day, n, value):
     return pd.DataFrame({"time_utc": times.strftime("%Y-%m-%dT%H:%M:%SZ"), "pm25": value})
 
 
-def test_recent_targets_skips_failed_station_and_drops_days_outside_window():
+def test_recent_targets_skips_failed_station_and_drops_days_outside_window(monkeypatch):
+    # The daily rule itself is target.daily_target's job (and the refresh dry run matched
+    # `ingest build` on every overlapping day). Here: failures, silent stations, the window.
+    monkeypatch.setattr(refresh.target, "daily_target", lambda hourly: pd.DataFrame(
+        {"date": ["2026-10-09", "2026-10-11", "2026-10-12"], "pm25": [1.0, 30.0, 99.0],
+         "source": ["24h", "24h", "5h"]}))
     stations = pd.DataFrame({"location_id": [1, 2, 3], "sensor_id": [11, 22, 33]})
     start, end = pd.Timestamp("2026-10-10", tz=TZ), pd.Timestamp("2026-10-12", tz=TZ)
 
@@ -58,11 +63,11 @@ def test_recent_targets_skips_failed_station_and_drops_days_outside_window():
             raise ConnectionError("timeout")
         if sensor_id == 33:
             return pd.DataFrame(columns=["time_utc", "pm25"])          # silent station
-        return pd.concat([_hours("2026-10-11", 24, 30.0), _hours("2026-10-12", 5, 99.0)])
+        return pd.DataFrame({"time_utc": ["2026-10-11T00:00:00Z"], "pm25": [30.0]})
 
     out, failed = refresh.recent_targets(stations, start, end, fetch=fetch)
     assert failed == [2]
-    assert set(zip(out["location_id"], out["date"])) == {(1, "2026-10-11")}   # not today
+    assert set(zip(out["location_id"], out["date"])) == {(1, "2026-10-11")}   # not before, not today
 
 
 def test_check_refuses_fewer_rows_or_changed_columns():
