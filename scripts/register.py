@@ -19,14 +19,11 @@ from src import config
 BAD = {None, "", "local", "unknown", "not-dvc-tracked"}
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--run", required=True, help="training job / MLflow run id")
-    args = ap.parse_args()
-
+def register(run_id: str) -> str:
+    """Register one run's model, or exit with the reason it is refused. Returns the version."""
     cfg = config.load()
     mlflow.set_tracking_uri(cfg.mlflow_tracking_uri)
-    run = mlflow.get_run(args.run)
+    run = mlflow.get_run(run_id)
     t, p, m = run.data.tags, run.data.params, run.data.metrics
 
     if t.get("gate_passed") != "True":
@@ -39,6 +36,7 @@ def main() -> None:
     if broken:
         sys.exit(f"REFUSED: lineage incomplete: {broken}")
 
+    retrain = t.get("kind") == "retrain"    # scored on a recent window, not the fixed val/test split
     lineage = {
         "git_commit": t["git_commit"],
         "data_version": t["data_version_targets"],
@@ -47,18 +45,29 @@ def main() -> None:
         "training_job_id": t["training_job_id"],
         "image_digest": t["image_digest"],
         "seed": p["seed"],
-        "metric_val": m["val_mae"],
-        "metric_test": m["test_mae"],
-        "metric": "MAE ug/m3; persistence val 6.14, test 4.12",
+        "metric_val": m["window_mae_mean" if retrain else "val_mae"],
+        "metric_test": m["window_mae" if retrain else "test_mae"],
+        "metric": t.get("metric_note", "MAE ug/m3; persistence val 6.14, test 4.12"),
         "target_mode": p["target_mode"],
         "shrink": p["shrink"],
         "stage": "staging",
     }
-    model_uri = f"azureml://jobs/{args.run}/outputs/artifacts/paths/model/"
+    if retrain:
+        lineage.update({"kind": "retrain", "window": t["window"], "train_end": t["train_end"],
+                        "champion_version": t.get("champion_version", "")})
+    model_uri = f"azureml://jobs/{run_id}/outputs/artifacts/paths/model/"
     version = get_adapter(cfg).register_model(model_uri, cfg.model_registry_name, tags=lineage)
     print(f"registered {cfg.model_registry_name} version {version}")
     for k, v in lineage.items():
         print(f"  {k:22} {v}")
+    return version
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--run", required=True, help="training job / MLflow run id")
+    register(ap.parse_args().run)
+
 
 
 if __name__ == "__main__":
