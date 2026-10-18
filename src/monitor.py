@@ -80,3 +80,15 @@ def model_vs_persistence(y, pred, yesterday, tolerance: float = 1.0,
                     f"model MAE {mae_model:.2f} > persistence MAE {mae_persist:.2f} "
                     f"over {int(ok.sum())} recent forecasts",
                     {"mae_model": mae_model, "mae_persistence": mae_persist, "rows": int(ok.sum())})]
+
+
+def from_performance(perf: dict, **kwargs) -> list[Finding]:
+    """model_vs_persistence on the rows the service's /performance returned
+    (its model's forecasts for the last 14 days with known actuals)."""
+    if not perf.get("rows"):
+        return []
+    found = model_vs_persistence(perf["y"], perf["pred"], perf["yesterday"], **kwargs)
+    for f in found:
+        f.details.update({"window": perf.get("window"), "model_version": perf.get("model_version"),
+                          "data_version": perf.get("data_version")})
+    return found

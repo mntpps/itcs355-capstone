@@ -59,7 +59,18 @@ def service_findings(url: str) -> list:
     if r.status_code != 200:
         return [monitor.Finding("service_not_ready", "critical",
                                 f"/ready returned {r.status_code}", {"body": r.text[:300]})]
-    return monitor.stale_data(r.json()["data_age_days"])
+    findings = monitor.stale_data(r.json()["data_age_days"])
+    try:
+        p = requests.get(f"{url.rstrip('/')}/performance", timeout=60)
+        if p.status_code == 200:
+            perf = p.json()
+            emit("model_performance", rows=perf.get("rows", 0), window=perf.get("window"),
+                 mae_model=perf.get("mae_model"), mae_persistence=perf.get("mae_persistence"),
+                 model_version=perf.get("model_version"), data_version=perf.get("data_version"))
+            findings += monitor.from_performance(perf)
+    except requests.RequestException:
+        pass            # /ready answered a moment ago; a real outage is reported as service_unreachable
+    return findings
 
 
 def replay(path: str):
