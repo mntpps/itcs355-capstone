@@ -254,3 +254,56 @@ python scripts/deploy_refresh.py --run-now --days 14     # re-fetch a longer win
 - Storage RBAC is granted per container, and the training data lives in the same container. Writes are protected by the code (only new md5-named objects plus the one manifest) and by md5 verification on every read. An Azure ABAC condition restricting writes to `capstone/serving/` would enforce it in the platform.
 - No alert on a failed refresh execution yet. A failed run is caught indirectly by `stale_data` once the data ages.
 - Stations with no reading yesterday (4 of 81 on Oct 16) have no feature row, so `/predict` returns 404 for them instead of guessing.
+
+
+## Weekly retraining (with a gate)
+
+**Why retrain at all.** Production v1 was fitted on data up to 2025-09 (`split.py`: everything after the test year is unused). It has never seen the 2025–26 dry season. A retraining pipeline lets new data in, but only through a gate.
+
+**Schedule:** Container Apps Job `itcs3556688020-retrain`, Sundays 07:30 Bangkok (`30 0 * * 0` UTC), an hour after that day's data refresh.
+
+**One run** (`scripts/retrain.py`):
+1. Reads the serving manifest: the challenger trains on the same refreshed data the service uses. The md5 is checked inside the job and recorded as the run's data version.
+2. Submits an Azure ML job on the training cluster (`src/retrain.py`, same image and the same study-17 settings as v1, taken from `train_remote.py`). It fits **5 seeds** on all rows ending 7 days before the window.
+3. Scores production (the version in `config/production.json`, loaded from the registry like the service does) on **the same rows**: same data version, same feature code, same window rule. If the row counts differ, it refuses to compare.
+4. Applies the gate. **Pass:** registers the registered seed's model as `staging` with full lineage. **Fail:** registers nothing. Either way it writes `reports/retrain-<date>.md`, logs it to the MLflow run, and emits one `retrain` JSON event.
+
+**The window.** The last 28 days. Neither model has seen them: the challenger stops 7 days before (the lag inputs reach back 7 days), and v1 stops in 2025-09. *Trade-off:* a 365-day window would always include a dry season, but then the challenger could only learn from the same data as v1, so retraining would be pointless for a year. So checks the window cannot judge are reported **n/a**, never faked:
+- no dry-season days → `mae_dry` is n/a;
+- fewer than 20 station-days above 37.5 → recall is n/a (a handful of isolated spikes, caught by nobody, would give a meaningless 0 ≥ 0).
+
+**Gate.** All judged checks must pass, and at least one must be judged.
+
+| vs | Check |
+|---|---|
+| persistence | the four checks of `src/evaluate.py` (MAE, dry-season MAE, recall, false alarms) |
+| production | mean MAE over 5 seeds ≤ production MAE − **0.056** (2 × the seed SD from the study-17 seed check) |
+| production | **every** seed's MAE < production MAE |
+| production | recall on days > 37.5 not below production's |
+
+**Promotion stays human.** A `staging` model reaches production only through `scripts/promote.py` → pull request → CI → canary, exactly like v1. The model registered is the one that was scored; it is not refit on the window afterwards, because then the shipped model would not be the tested one.
+
+**Identity** `itcs3556688020-retrain`: AcrPull · AzureML Data Scientist (workspace) · Storage Blob Data **Reader** (data container). It can propose a model, but it can neither write data nor change production.
+
+**Run it**
+```powershell
+python scripts/retrain.py --image <registry>/itcs355@sha256:...        # from a laptop (clean commit)
+python scripts/retrain.py --image ... --no-register                    # judge only
+python scripts/deploy_retrain.py --image <registry>/itcs355@sha256:...  # schedule (clean commit)
+python scripts/deploy_retrain.py --run-now
+```
+
+**Evidence (2026-10-18, first run): REJECTED** (`reports/retrain-2026-10-18.md`)
+
+| Sep 20 – Oct 17, 2,084 station-days | MAE |
+|---|---|
+| persistence | 4.186 |
+| challenger, 5 seeds | 4.035 – 4.079 (mean 4.060) |
+| **production v1** | **3.988** |
+
+Both models beat persistence, but v1 was better, and all 5 seeds of the challenger were worse. So the gate kept v1, and production was unchanged. More data did not mean a better model on this month: without a gate, a weekly schedule would have quietly made the service worse.
+
+**Known limits**
+- One 28-day window is small evidence. The margin and the every-seed rule guard against seed noise, not against an unusual month. A rejected challenger costs only a week; a wrongly promoted one would cost forecasts, so the gate errs towards keeping production.
+- In the rainy season the gate effectively judges MAE and false alarms only; dry-season checks apply from November.
+- A failed weekly run alerts nobody yet (same gap as the refresh job). Production is unaffected, because nothing changes without a pass and a PR.
