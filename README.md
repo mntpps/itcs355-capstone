@@ -142,6 +142,7 @@ Thresholds reuse `src/checks.py`; each is tied to a finding in `docs/data-findin
 | `feed_outage` | fewer than half the stations reported in the last 3 h (Finding 1) | critical |
 | `stuck_sensor` | a station's **latest** reading ends a run of ≥ 8 identical hours (Finding 4: longest healthy run 7 h) | warning |
 | `service_unreachable` / `service_not_ready` | `/ready` cannot be reached, or does not return 200 | critical |
+| `model_vs_persistence` | the serving model's MAE over the last 14 days with known actuals is worse than persistence's (from `/performance`: the model backtests itself on every data reload) | warning |
 
 One owner per problem: a station that stopped reporting is a `feed_outage`, not a `stuck_sensor`, so one failure never raises three alerts.
 
@@ -177,11 +178,12 @@ ContainerAppConsoleLogs_CL
           mode = tostring(e.mode), message = tostring(e.message)
 ```
 
-### Evidence (2026-10-16)
+### Evidence (2026-10-16 to 18)
 
 - **First live run, a true positive:** `stale_data` critical, *"forecast uses data 5 days old"*. The service still used the Oct 11 snapshot. Alert email at 21:02. Fix: the daily data refresh.
 - **Frozen-sensor demo:** the real Bang Sue freeze (Sep 2023, stuck at 15.0) replayed in the cloud at 21:17. `stuck_sensor`, `mode = replay`, alert email at 21:32: **about 15 min from finding to email**.
 - **The first cloud replay failed** (`FileNotFoundError`: the recorded incident was not in the image). It was diagnosed from the job's logs in Log Analytics and fixed by adding `tests/fixtures/` to the image; the replay then succeeded.
+- `model_vs_persistence` (live since Oct 18): Oct 4–17, 1,061 station-days, model MAE 4.679 vs persistence 4.995 (−6.3%), consistent with the test year (−3.5%); no finding. Checked hourly by the monitor.
 
 
 ### Service-level objectives (targets)
@@ -197,7 +199,6 @@ ContainerAppConsoleLogs_CL
 
 ### Not yet wired
 
-- `model_vs_persistence` needs recent forecasts and actuals, which requires the daily refresh.
 - No alert yet on **failed monitor executions** (a broken monitor would currently go unnoticed).
 - Email subjects are the same for every check; one rule per check would put the problem in the subject line.
 

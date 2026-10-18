@@ -40,6 +40,7 @@ from src.evaluate import THRESHOLD
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION = REPO_ROOT / "config" / "production.json"
 DATA_FILES = ("targets.csv", "weather_daily.csv")
+PERFORMANCE_DAYS = 14       # /performance: the last 14 days that have a known next-day value
 log = logging.getLogger("pm25.service")
 
 
@@ -55,6 +56,7 @@ class Loaded:
     data_version: str = "unknown"       # md5 of targets.csv
     weather_version: str = "unknown"    # md5 of weather_daily.csv
     data_from: str = "pointer"          # "manifest" (daily refresh) or "pointer" (committed .dvc)
+    recent: pd.DataFrame | None = None  # last days with a known actual; with_backtest adds "pred"
 
 
 def load_data(cfg, blob_uri: str | None, want: dict | None = None, source: str = "pointer") -> dict:
@@ -69,8 +71,24 @@ def load_data(cfg, blob_uri: str | None, want: dict | None = None, source: str =
     day = df["date"].max()
     rows = df[df["date"] == day].copy()
     rows.index = rows["location_id"].astype(str)
+    known = df[df["y"].notna()]
+    recent = known[known["date"] > known["date"].max() - pd.Timedelta(days=PERFORMANCE_DAYS)].copy()
     return {"rows": rows, "forecast_date": day, "data_version": want["targets.csv"],
-            "weather_version": want["weather_daily.csv"], "data_from": source}
+            "weather_version": want["weather_daily.csv"], "data_from": source, "recent": recent}
+
+
+def with_backtest(m: Loaded) -> Loaded:
+    """Add the serving model's forecasts for the recent rows: what it would have said each day.
+    Never fatal: if it fails, /performance has no rows and forecasting is unaffected."""
+    if m.recent is None or m.recent.empty or "pred" in m.recent:
+        return m
+    try:
+        out = m.recent[["date", "location_id", "y", "lag1"]].copy()
+        out["pred"] = forecast.predict(m.model, m.recent, m.target_mode, m.shrink)
+        return replace(m, recent=out)
+    except Exception:  # noqa: BLE001
+        log.exception("backtest failed; /performance will report no rows")
+        return replace(m, recent=None)
 
 
 def load_production() -> Loaded:
@@ -134,7 +152,7 @@ def create_app(loader: Callable[[], Loaded] = load_production, background: bool 
     def _load() -> None:
         t0 = time.perf_counter()
         try:
-            m = loader()
+            m = with_backtest(loader())
             state["loaded"] = m
             log.warning("ready: %s v%s, forecast_date %s, %d stations, data from %s, loaded in %.1fs",
                         m.model_name, m.model_version, f"{m.forecast_date:%Y-%m-%d}",
@@ -158,6 +176,7 @@ def create_app(loader: Callable[[], Loaded] = load_production, background: bool 
         state["data_error"] = None
         if new is None:
             return False
+        new = with_backtest(new)
         state["loaded"] = new           # one assignment: a request sees all old or all new rows
         emit("data_reload", data_from=new.data_from,
              old_data_version=m.data_version, new_data_version=new.data_version,
@@ -193,7 +212,7 @@ def create_app(loader: Callable[[], Loaded] = load_production, background: bool 
             log.exception("unhandled error on %s", request.url.path)
             response = JSONResponse(status_code=500, content={"detail": "internal error"})
         response.headers["x-revision"] = _revision()
-        if request.url.path not in ("/health", "/ready"):  # probes run every few seconds; not traffic
+        if request.url.path not in ("/health", "/ready", "/performance"):  # probes/monitor; not traffic
             m = state["loaded"]
             emit("request", method=request.method, path=request.url.path,
                  status=response.status_code,
@@ -243,6 +262,27 @@ def create_app(loader: Callable[[], Loaded] = load_production, background: bool 
                 "data_check_error": state["data_error"],
                 "revision": _revision(),
                 "image": os.environ.get("IMAGE_DIGEST", "local")}
+
+
+    @app.get("/performance")
+    def performance():
+        """The serving model on the last PERFORMANCE_DAYS days with known actuals, next to
+        persistence ('tomorrow = today'). The monitor turns this into a finding."""
+        m = state["loaded"]
+        if m is None:
+            return JSONResponse(status_code=503, content={"ready": False, "error": state["error"]})
+        b = m.recent
+        if b is None or "pred" not in b:
+            return {"model_version": m.model_version, "data_version": m.data_version, "rows": 0}
+        return {"model": m.model_name, "model_version": m.model_version,
+                "data_version": m.data_version,
+                "window": [f"{b['date'].min():%Y-%m-%d}", f"{b['date'].max():%Y-%m-%d}"],
+                "rows": len(b),
+                "mae_model": round(float((b["pred"] - b["y"]).abs().mean()), 3),
+                "mae_persistence": round(float((b["lag1"] - b["y"]).abs().mean()), 3),
+                "y": b["y"].round(3).tolist(), "pred": b["pred"].round(3).tolist(),
+                "yesterday": b["lag1"].round(3).tolist()}
+    
 
     @app.post("/predict")
     def predict(req: PredictRequest):
