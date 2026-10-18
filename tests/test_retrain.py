@@ -30,6 +30,13 @@ def test_rainy_window_marks_dry_season_and_recall_not_applicable():
     assert checks == {"mae": True, "mae_dry": None, "recall": None, "false_alarm_rate": True}
 
 
+def test_a_few_isolated_spikes_are_too_few_to_judge_recall():
+    # Oct 2026 window: 11 days above 37.5, caught by nobody -> recall 0 vs 0 proves nothing
+    few = metrics(4.0, recall=0.0, false_alarm=1.0, bad_days=11)
+    assert retrain.persistence_checks(few, metrics(4.2, recall=0.0, false_alarm=1.0, bad_days=11))["recall"] is None
+    assert retrain.champion_checks([4.0] * 5, few, few)["recall_not_below_production"] is None
+
+
 def test_dry_window_judges_all_four_checks():
     checks = retrain.persistence_checks(metrics(5.0, 6.0, 0.8, 0.1, 30),
                                         metrics(5.5, 6.5, 0.7, 0.2, 30))

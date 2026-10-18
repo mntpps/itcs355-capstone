@@ -31,6 +31,7 @@ WINDOW_DAYS = 28
 SEEDS = (seeds.DEFAULT_SEED, 1, 2, 3, 4)
 SEED_SD = 0.028          # val MAE spread over these five seeds for study-17 (README)
 MARGIN = 2 * SEED_SD     # a challenger must beat production by more than seed luck
+MIN_BAD_DAYS = 20        # fewer station-days above 37.5 than this: too few to judge recall
 
 
 # ---------- the window and the gate (pure; tested in tests/test_retrain.py) ----------
@@ -48,7 +49,7 @@ def persistence_checks(model: dict, base: dict) -> dict:
     checks = evaluate.gate(model, base)
     if _nan(model["mae_dry"]) or _nan(base["mae_dry"]):
         checks["mae_dry"] = None
-    if base["bad_days"] == 0:
+    if base["bad_days"] < MIN_BAD_DAYS:     # a handful of isolated spikes (often 0 >= 0) proves nothing
         checks["recall"] = None
     return checks
 
@@ -59,7 +60,7 @@ def champion_checks(seed_maes: list[float], challenger: dict, production: dict,
     return {
         "mean_mae_beats_production_by_margin": float(np.mean(seed_maes)) <= production["mae"] - margin,
         "every_seed_beats_production": max(seed_maes) < production["mae"],
-        "recall_not_below_production": (None if production["bad_days"] == 0
+        "recall_not_below_production": (None if production["bad_days"] < MIN_BAD_DAYS
                                         else challenger["recall"] >= production["recall"]),
     }
 
