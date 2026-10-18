@@ -59,7 +59,8 @@ def data_version(path: Path) -> str:
     return recorded
 
 
-def parse_args() -> argparse.Namespace:
+def build_parser() -> argparse.ArgumentParser:
+    """The model settings, shared with src.retrain so both train exactly the same way."""
     p = argparse.ArgumentParser()
     p.add_argument("--target-mode", choices=forecast.TARGET_MODES, default="level")
     p.add_argument("--features", choices=list(FEATURE_SETS), default="all")
@@ -77,7 +78,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--loss", choices=["squared_error", "absolute_error"], default="squared_error")
     p.add_argument("--shrink", type=float, default=1.0,
                     help="delta mode: forecast = yesterday + shrink * predicted change")
-    return p.parse_args()
+    return p
+
+
+def parse_args() -> argparse.Namespace:
+    return build_parser().parse_args()
 
 
 def fit(rows: pd.DataFrame, cols: list[str], args, seed: int):
