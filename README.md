@@ -193,10 +193,64 @@ ContainerAppConsoleLogs_CL
 | Freshness | the forecast's data is ≤ 1 day old in ≥ 99% of hours | a forecast from stale data is silently wrong |
 | Detection | data problems are alerted within 30 min of the monitor run that finds them | measured at ~15 min in the replay |
 
-Freshness is **currently violated** (the data is 5 days old) until the daily refresh is in place. The SLO is stated before it is met, not adjusted to fit.
+- Freshness SLO (data ≤ 1 day old): met since Oct 17 19:03 (daily refresh, see below); it was violated Oct 16–17 (`stale_data` incident).
 
 ### Not yet wired
 
 - `model_vs_persistence` needs recent forecasts and actuals, which requires the daily refresh.
 - No alert yet on **failed monitor executions** (a broken monitor would currently go unnoticed).
 - Email subjects are the same for every check; one rule per check would put the problem in the subject line.
+
+
+## Daily data refresh
+
+The forecast needs yesterday's readings. A daily job brings them in, so serving data is never more than a day old.
+
+**Schedule:** Container Apps Job `itcs3556688020-refresh`, every day at 06:30 Bangkok (`30 23 * * *` UTC), when yesterday is complete.
+
+**What one run does** (`python -m src.refresh`):
+1. Reads the current serving data: the version named in the manifest, or the committed DVC pointer if there is no manifest yet. Every download is verified by md5.
+2. Re-fetches the last 10 whole days from OpenAQ (81 stations) and the weather API. Re-fetching a window, not just yesterday, picks up readings OpenAQ publishes late.
+3. Builds daily rows with **the same functions as training** (`ingest.hourly_series`, `target.daily_target`, `weather.daily_features`) and replaces those days in `targets.csv` and `weather_daily.csv`.
+4. Uploads both files to the DVC remote **by md5** (content-addressed, never overwritten), then writes `serving/current.json` **last**:
+```json
+   {"built_at": "...", "window": ["2026-10-07", "2026-10-17"],
+    "base":  {"from": "pointer", "targets.csv": "85a15b41...", ...},
+    "files": {"targets.csv": {"md5": "57428101...", "rows": 58031, "last_date": "2026-10-16"}, ...},
+    "stations": 81, "stations_failed": []}
+```
+
+**Fails closed.** Nothing is published, and the run exits 1, if more than 20% of stations fail, if a file comes out with different columns, or if it has fewer rows than before. Because the manifest is written last, a failed run never leaves the service pointing at half-published data. The old data stays in place, and the `stale_data` check alerts if refreshes keep failing.
+
+**How the service picks it up.** The service reads the manifest at startup and re-checks it every hour (`DATA_CHECK_SECONDS`, default 3600). When the md5 changes, it rebuilds only the feature rows and swaps them in with a single assignment; the model is never reloaded. A failed check keeps serving the old data and reports `data_check_error` in `/ready`. `/ready` shows `data_from` (`manifest` or `pointer`) and `data_version` (md5 of `targets.csv`), and every prediction log line carries `data_version`.
+
+**Lineage.** The training data stays pinned in git (`data/*.dvc`) and recorded with each model. Serving data is versioned by the manifest: `base` names the version it was built from, and `files` names what it produced. Either can be fetched from the DVC remote by md5.
+
+| Identity | Can | Cannot |
+|---|---|---|
+| `itcs3556688020-refresh` | AcrPull · Key Vault Secrets User on `openaq-api-key` only · Storage Blob Data **Contributor** on container `itcs355` | anything else in the subscription |
+| `itcs3556688020-serve` | read data (Storage Blob Data **Reader**) | write data |
+| `itcs3556688020-monitor` | read the one secret | touch data at all |
+
+The refresh job is the only component that can write data.
+
+**Run it**
+```powershell
+python -m src.refresh --dry-run                          # locally: data/ in, build/refresh/ out, nothing uploaded
+python scripts/deploy_refresh.py --image <registry>/itcs355@sha256:...   # create/update the job (digest only)
+python scripts/deploy_refresh.py --run-now --dry-run     # in the cloud: reads blob storage, uploads nothing
+python scripts/deploy_refresh.py --run-now               # one real refresh now
+python scripts/deploy_refresh.py --run-now --days 14     # re-fetch a longer window once (after an outage)
+```
+
+**Evidence (Oct 16–18)**
+- **Same code as training:** a local dry run re-derived 461 station-days that `ingest build` had already computed: 461/461 identical (max difference 0.0).
+- **Code first, data second:** the service's data-reload code was canaried while no manifest existed, so both revisions served the same data. Result: 70/70 identical forecasts, promoted (`reports/canary-m1-7f6189f-10171836.md`). Only then was data published, so the canary judged the code alone.
+- **First publish:** Oct 17 19:03. `/ready` then showed `data_from: manifest`, `data_age_days: 1` (was 6).
+- **Incident closed:** the `stale_data` alert (fired Oct 16 21:02) resolved automatically on Oct 17 at 20:48.
+- **First scheduled run:** Oct 18 06:30. `/ready` showed a new `data_version` with no redeploy.
+
+**Known limits**
+- Storage RBAC is granted per container, and the training data lives in the same container. Writes are protected by the code (only new md5-named objects plus the one manifest) and by md5 verification on every read. An Azure ABAC condition restricting writes to `capstone/serving/` would enforce it in the platform.
+- No alert on a failed refresh execution yet. A failed run is caught indirectly by `stale_data` once the data ages.
+- Stations with no reading yesterday (4 of 81 on Oct 16) have no feature row, so `/predict` returns 404 for them instead of guessing.
