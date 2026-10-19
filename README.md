@@ -184,6 +184,7 @@ ContainerAppConsoleLogs_CL
 - **Frozen-sensor demo:** the real Bang Sue freeze (Sep 2023, stuck at 15.0) replayed in the cloud at 21:17. `stuck_sensor`, `mode = replay`, alert email at 21:32: **about 15 min from finding to email**.
 - **The first cloud replay failed** (`FileNotFoundError`: the recorded incident was not in the image). It was diagnosed from the job's logs in Log Analytics and fixed by adding `tests/fixtures/` to the image; the replay then succeeded.
 - `model_vs_persistence` (live since Oct 18): Oct 4–17, 1,061 station-days, model MAE 4.679 vs persistence 4.995 (−6.3%), consistent with the test year (−3.5%); no finding. Checked hourly by the monitor.
+- Service SLOs measured per day on the dashboard (Oct 15, 17, 18; 2,162 requests): 0 server errors (availability 100%); worst daily p95 latency 139 ms (server-side) against the 500 ms target.
 
 
 ### Service-level objectives (targets)
@@ -308,3 +309,19 @@ Both models beat persistence, but v1 was better, and all 5 seeds of the challeng
 - One 28-day window is small evidence. The margin and the every-seed rule guard against seed noise, not against an unusual month. A rejected challenger costs only a week; a wrongly promoted one would cost forecasts, so the gate errs towards keeping production.
 - In the rainy season the gate effectively judges MAE and false alarms only; dry-season checks apply from November.
 - A failed weekly run alerts nobody yet (same gap as the refresh job). Production is unaffected, because nothing changes without a pass and a PR.
+
+
+### Dashboard
+
+`python scripts/create_dashboard.py` creates (or updates) the Azure Monitor Workbook **PM2.5 forecast - operations**. The six tiles are defined in that script as KQL queries over the events the system already logs, so the dashboard is rebuilt from the repo, not clicked together:
+
+| Tile | Event | Shows |
+|---|---|---|
+| Traffic | `request` | requests and 5xx per hour (0 when idle) |
+| Service SLOs per day | `request` | requests, errors, availability %, p50/p95 latency, SLO met |
+| Model quality | `model_performance` | serving model vs persistence MAE, hourly |
+| Data freshness | `refresh` | each daily refresh: last date, age, rows, failed stations |
+| Monitor findings | `finding` | findings per day by check (replays labelled) |
+| Retraining | `retrain` | weekly gate decisions with challenger / production / persistence MAE |
+
+Not shown on purpose: the distribution of served forecasts. Logged predictions cover only stations someone called (mostly canary and load tests), so they would describe our testing, not Bangkok's air.
