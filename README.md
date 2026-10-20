@@ -4,6 +4,43 @@ ITCS355 MLOps capstone · Bhornpailin Chunkasut (6688020)
 
 Forecasts each Bangkok air-quality station's PM2.5 for the next day. A daily job (06:30) brings in the previous day's complete data; the API computes forecasts on request from the latest data, with the same code as training.
 
+## Architecture
+
+```mermaid
+flowchart LR
+  OA[OpenAQ API<br/>81 stations] --> R
+  OA --> M
+  OM[Open-Meteo] --> R
+  GH[GitHub PR + CI<br/>secret-scan, lint-test, build] -->|merged commit| DEV[laptop<br/>docker build + push]
+  DEV -->|image by digest| ACR[(Container Registry)]
+  subgraph Azure
+    R[refresh job<br/>daily 06:30] -->|md5 objects, manifest last| B[(Blob storage<br/>DVC remote + serving manifest)]
+    B -->|data by md5| S[forecast service<br/>Container Apps, canary]
+    REG[(Azure ML registry)] -->|model version in<br/>config/production.json| S
+    B --> T[retrain job<br/>weekly, Sun 07:30]
+    T -->|Azure ML job| C[training cluster]
+    C -->|staging, only if the gate passes| REG
+    M[monitor job<br/>hourly] -->|/ready, /performance| S
+    S & R & T & M -->|JSON events| LA[(Log Analytics)]
+    LA --> AL[alert rule → email]
+    LA --> D[dashboard workbook]
+  end
+  ACR --> S & R & T & M & C
+```
+
+Everything runs as its own least-privilege managed identity (see Identities). Code and models reach production only through a merged pull request, CI and a canary; data changes only through the refresh job, which fails closed. Only the refresh job can write data.
+
+## Documents
+
+| | |
+|---|---|
+| Model card (what the model is, how it was evaluated, its limits) | `docs/model-card.md` |
+| Data findings (the rules behind every check) | `docs/data-findings.md` |
+| Post-mortem: stale serving data, Oct 15–17 | `reports/postmortem-2026-10-16-stale-data.md` |
+| Cost report (actual spend and monthly estimate) | `reports/cost-report.md` |
+| Model selection study | `reports/study-comparison.md` |
+| Canary, retraining and load-test reports | `reports/` |
+
 ## Data
 
 - **PM2.5:** Pollution Control Department of Thailand (Air4Thai), via the OpenAQ API v3.
@@ -24,10 +61,8 @@ missed the recall check by 0.3 points. Three trials passed the gate on the test 
 on validation; none were chosen, since selecting on test would make the test meaningless.
 **Seed variance:** not zero. With more than 10,000 training rows, scikit-learn's `HistGradientBoostingRegressor` turns on early stopping automatically, and the seed chooses its random 10% hold-out. Five seeds of study-17 (20260101, 1–4) give val MAE 5.901 ± 0.028 (range 5.877–5.946) and test MAE 3.964 ± 0.009 (3.952–3.976); all five pass both gates. The worst seed still beats persistence (val 6.14, test 4.12), so the improvement is not seed luck. The registered seed (20260101) was fixed before the study.
 **How narrow the selection was:** study-17 was the only trial to pass the validation gate. study-18 (k=0.5) had lower val MAE (5.843 vs 5.889) but recall 0.734, just below persistence's 0.737; study-17's 0.739 passed by 0.002. Both margins are within seed noise, so the choice between them is narrow. study-17 passed the gate with all five seeds. The rule (best val MAE among gate-passers) and the seed were fixed before the study, and we did not re-run study-18 under other seeds to change the outcome — that would be selecting on results. Cost of the choice: lower onset recall (0.075 vs 0.121), i.e. slower to catch the first day of an episode.
-**Cost:** a full fit takes about a minute on a laptop; monthly retraining cost is in the
-cost report. **How this could be wrong:** the margin over persistence is small (MAE −4%,
-recall +0.2 points), validation covers one dry season, and station-days are correlated,
-so the improvement may be partly noise. The model is mostly persistence and catches few
+**Cost:** a full fit takes about a minute on a laptop; weekly retraining costs about 0.25 USD a
+month on the training cluster (`reports/cost-report.md`). **How this could be wrong:** the margin over persistence is small (MAE −4%, recall +0.2 points), validation covers one dry season, and station-days are correlated, so the improvement may be partly noise. The model is mostly persistence and catches few
 pollution onsets (7%).
 
 Full comparison: `reports/study-comparison.md` · experiment `pm25-study` in Azure ML.
@@ -40,15 +75,17 @@ false-alarm rate no higher (`src/evaluate.py`). If nothing passes, persistence s
 
 ## Identities (least privilege)
 
-| Identity | Can do | Role and scope | Why it is needed |
-|---|---|---|---|
-| Training cluster (`itcs3556688020-cpu`, system-assigned managed identity) | Pull the training image | `AcrPull` on the container registry only | Jobs run the image by digest; read-only, cannot push or delete |
-| | Read the versioned data | `Storage Blob Data Reader` on the storage account only | Job inputs are DVC objects addressed by md5; training never writes data |
+Every component runs as its own managed identity with only the roles it needs. No component holds a password or key; the one external secret (the OpenAQ key) is a Key Vault reference.
 
-Evidence: before `AcrPull` was granted, the first job failed with "Failed to pull Docker image … could
-not authenticate with the Docker registry" (job `gray_lizard_1nk701bx42`). The registry's admin
-password was deliberately not enabled: one shared credential with full access is the opposite of
-least privilege. A scheduled run uses this identity, not the developer's login.
+| Identity | Used by | Roles (scope) | Cannot |
+|---|---|---|---|
+| training cluster (system-assigned) | Azure ML training jobs | AcrPull (registry) · Storage Blob Data Reader (storage) | write data, push images |
+| `itcs3556688020-serve` | forecast service | AcrPull · Storage Blob Data Reader · AzureML Data Scientist (workspace, to load the model) | write data |
+| `itcs3556688020-monitor` | hourly monitor | AcrPull · Key Vault Secrets User on **one** secret (`openaq-api-key`) | touch data at all |
+| `itcs3556688020-refresh` | daily refresh | AcrPull · that one secret · Storage Blob Data **Contributor** (container `itcs355`) | anything outside that container |
+| `itcs3556688020-retrain` | weekly retraining | AcrPull · AzureML Data Scientist · Storage Blob Data Reader | write data, change production |
+
+Evidence: before `AcrPull` was granted, the first training job failed with "Failed to pull Docker image … could not authenticate with the Docker registry" (job `gray_lizard_1nk701bx42`). The registry's admin password was deliberately never enabled: one shared credential with full access is the opposite of least privilege.
 
 ## Promotion (staging → production)
 
@@ -58,11 +95,56 @@ least privilege. A scheduled run uses this identity, not the developer's login.
 - **Who may promote:** anyone may open the PR; merging is the approval. Here the single author approves; in a team, branch protection would require a second reviewer and passing CI.
 - **Rollback:** revert the promotion commit. `previous_version` in the file records what to fall back to.
 
-## How to run *(coming)*
+## How to run
 
-## Deployment *(coming)*
+**Prerequisites:** Python 3.11, Docker, Azure CLI (`az login`), access to the resource group.
 
-## Deliberate failure: frozen sensor *(coming)*
+```powershell
+python -m venv .venv; .venv\Scripts\Activate.ps1
+pip install --require-hashes -r requirements.txt   # the same hashed lock CI installs
+copy cloud.env.example cloud.env                   # fill in the capability slots (never committed)
+copy .env.example .env                             # OpenAQ key, only for local runs (never committed)
+python scripts/cloud_check.py                      # every slot resolves
+dvc pull                                           # the exact data versions named in data/*.dvc
+ruff check . ; python -m pytest -q                 # the same checks as CI
+```
+
+| Locally | Command |
+|---|---|
+| Serve | `uvicorn src.service:app --port 8000`, then http://localhost:8000/docs |
+| Train study-17 | `python -m src.train --target-mode delta --features no_weather --loss absolute_error --learning-rate 0.03 --min-samples-leaf 200 --max-leaf-nodes 15 --shrink 0.25` |
+| Refresh data, dry run | `python -m src.refresh --dry-run` |
+| Monitor once / replay an incident | `python scripts/monitor_run.py` · `--replay tests/fixtures/bang_sue_frozen_2023-09.csv` |
+
+**In Azure.** Every change goes PR → CI → merge first; everything is deployed **by image digest**.
+
+```powershell
+az acr login -n <registry>
+docker build -t <registry>.azurecr.io/itcs355:<commit> . ; docker push <registry>.azurecr.io/itcs355:<commit>
+$img = docker inspect --format "{{index .RepoDigests 0}}" <registry>.azurecr.io/itcs355:<commit>
+
+python scripts/train_remote.py --image $img                 # train (Azure ML job, training cluster)
+python scripts/register.py --run <run id>                    # staging, only with gate + full lineage
+python scripts/promote.py --version N --reason "..."         # rewrites config/production.json -> pull request
+
+python scripts/deploy_service.py --image $img --canary 20    # new revision with 20% of traffic
+python scripts/canary.py ; python scripts/canary.py --apply  # decide by the written rule, then apply
+
+python scripts/deploy_refresh.py --image $img                # daily refresh job
+python scripts/deploy_monitor.py --image $img                # hourly monitor job
+python scripts/deploy_retrain.py --image $img                # weekly retraining job
+python scripts/create_alerts.py                              # alert rule + email action group
+python scripts/create_dashboard.py                           # operations dashboard
+```
+
+### One-time cloud setup
+
+The resource group, registry, storage account and Azure ML workspace come from the course labs and are named in `cloud.env`. On top of them:
+
+- **Training cluster:** `python scripts/create_compute.py`.
+- **Container Apps environment:** `az containerapp env create -g <rg> -n itcs3556688020-env -l southeastasia --environment-mode ConsumptionOnly`. It must be ConsumptionOnly: the express default cannot run two revisions, so it cannot canary.
+- **Key Vault** `itcs3556688020-kv` with the secret `openaq-api-key`, entered in the portal, never in a terminal.
+- **Identities:** for each row of the Identities table, `az identity create -g <rg> -n <name>`, then one `az role assignment create --assignee-object-id <principalId> --assignee-principal-type ServicePrincipal --role "<role>" --scope <scope>` per role, at the narrowest scope listed.
 
 ## Serving cost
 
@@ -76,8 +158,8 @@ From `scripts/cost_serving.py` (Azure Retail Prices API, Container Apps Consumpt
 ## Deployment and canary
 
 - **Deploy by digest** (`scripts/deploy_service.py`): one image for training and serving; refuses tags. Azure Container Apps (standard, ConsumptionOnly environment — the new *express* default cannot run two revisions, so it cannot canary). Revision name = model version + image digest + deploy time.
-- **Canary**: `--canary 10` creates the new revision with 10% of traffic *in the same request*, so no user ever sees an untested revision at 100%.
-- **Decision by written rule** (`scripts/canary.py`): promote only if the candidate served ≥ 20 requests, its error rate ≤ stable's, its p95 ≤ 500 ms, and — for the same model version — it returns **exactly the same forecast for every station**. Otherwise roll back. Errors that cannot be attributed to a revision count against the candidate. Latency is checked against the absolute target, not against stable: at 90/10 the stable revision queues more and always looks slower.
+- **Canary**: `--canary N` creates the new revision with N% of traffic *in the same request* (10% for the first canaries, 20% later), so no user ever sees an untested revision at 100%.
+- **Decision by written rule** (`scripts/canary.py`): promote only if the candidate served ≥ 20 requests, its error rate ≤ stable's, its p95 ≤ 500 ms, and — for the same model version — it returns **exactly the same forecast for every station**. Otherwise roll back. Errors that cannot be attributed to a revision count against the candidate. Latency is checked against the absolute target, not against stable: at 90/10 or 80/20 the stable revision queues more and always looks slower.
 - **Evidence:**
   - Good candidate `488ae00` (structured logging): 0 errors, p95 73 ms, 39/39 forecasts identical → **promoted** (`reports/canary-m1-488ae00-10151536.md`).
   - Bad candidate `aa288ab` (branch `demo/bad-canary`, never merged: `shrink` not passed to `forecast.predict`): 0 errors, p95 75 ms — looked perfect — but **0/54 forecasts matched** → **rolled back in 14.8 s** (`reports/canary-m1-aa288ab-10151621.md`).
@@ -93,6 +175,7 @@ Base URL: `https://itcs3556688020-forecast.agreeableforest-9e3a5ae0.southeastasi
 |---|---|
 | `GET /health` | process alive (liveness) |
 | `GET /ready` | model + data loaded (readiness): model version, data version, data age, revision, image |
+| `GET /performance` | the serving model's own forecasts for the last 14 days with known actuals, next to persistence (used by the monitor) |
 | `POST /predict` | `{"station_id": "135"}` → tomorrow's PM2.5 for one station |
 | `POST /predict/batch` | `{"station_ids": ["135", "200"]}`, or `{}` for every station |
 
@@ -147,19 +230,13 @@ One owner per problem: a station that stopped reporting is a `feed_outage`, not 
 
 ### How it runs
 
-- `scripts/monitor_run.py` runs as an hourly **Azure Container Apps Job** `itcs3556688020-monitor` (cron `5 * * * *` UTC), using the same image as the service. Each run fetches the last 48 h for all 81 stations from OpenAQ (about 4 min, within the API rate limit), calls `/ready`, and writes **one JSON line per finding**.
+- `scripts/monitor_run.py` runs as an hourly **Azure Container Apps Job** `itcs3556688020-monitor` (cron `5 * * * *` UTC), using the same image as the service. Each run fetches the last 48 h for all 81 stations from OpenAQ (about 4 min, within the API rate limit), calls `/ready` and `/performance`, and writes **one JSON line per finding**.
 - **Exit code 0 means the monitor ran**, with or without findings. A *failed execution* means the monitor itself broke. These are two different alarms, kept apart.
 - `--replay <csv>` feeds a recorded incident through the same check; its findings are labelled `mode = replay`.
 
 ### Secrets and identity
 
-The OpenAQ key lives in **Key Vault** `itcs3556688020-kv` (entered in the portal, never in a terminal, file or script). The job definition holds only a reference to it. The job runs as `itcs3556688020-monitor`, which can do exactly two things:
-
-| Identity | Roles |
-|---|---|
-| training cluster | AcrPull (registry), Storage Blob Data Reader (storage) |
-| `itcs3556688020-serve` | AcrPull, Storage Blob Data Reader, AzureML Data Scientist (workspace) |
-| `itcs3556688020-monitor` | AcrPull, **Key Vault Secrets User on the single secret `openaq-api-key`** |
+The OpenAQ key lives in **Key Vault** `itcs3556688020-kv` (entered in the portal, never in a terminal, file or script). The job definition holds only a reference to it. The job runs as `itcs3556688020-monitor`, which can do exactly two things: pull the image (AcrPull) and read that **one** secret (Key Vault Secrets User on `openaq-api-key`). It cannot touch data. All identities: see **Identities** above.
 
 ### Alerting
 
@@ -177,11 +254,11 @@ ContainerAppConsoleLogs_CL
           mode = tostring(e.mode), message = tostring(e.message)
 ```
 
-### Evidence (2026-10-16 to 18)
+### Evidence (2026-10-15 to 18)
 
 - **First live run, a true positive:** `stale_data` critical, *"forecast uses data 5 days old"*. The service still used the Oct 11 snapshot. Alert email at 21:02. Fix: the daily data refresh.
 - **Frozen-sensor demo:** the real Bang Sue freeze (Sep 2023, stuck at 15.0) replayed in the cloud at 21:17. `stuck_sensor`, `mode = replay`, alert email at 21:32: **about 15 min from finding to email**.
-- **The first cloud replay failed** (`FileNotFoundError`: the recorded incident was not in the image). It was diagnosed from the job's logs in Log Analytics and fixed by adding `tests/fixtures/` to the image; the replay then succeeded.
+- **The first cloud replay failed** (`FileNotFoundError`: the recorded incident was not in the image). It was diagnosed from the job's logs in Log Analytics and fixed by adding `tests/fixtures/` to the image; the replay then succeeded. That Dockerfile fix was later found to have been committed after its PR was merged, so it never reached `main` until it was cherry-picked (see the post-mortem).
 - `model_vs_persistence` (live since Oct 18): Oct 4–17, 1,061 station-days, model MAE 4.679 vs persistence 4.995 (−6.3%), consistent with the test year (−3.5%); no finding. Checked hourly by the monitor.
 - Service SLOs measured per day on the dashboard (Oct 15, 17, 18; 2,162 requests): 0 server errors (availability 100%); worst daily p95 latency 139 ms (server-side) against the 500 ms target.
 
@@ -213,7 +290,7 @@ The forecast needs yesterday's readings. A daily job brings them in, so serving 
 1. Reads the current serving data: the version named in the manifest, or the committed DVC pointer if there is no manifest yet. Every download is verified by md5.
 2. Re-fetches the last 10 whole days from OpenAQ (81 stations) and the weather API. Re-fetching a window, not just yesterday, picks up readings OpenAQ publishes late.
 3. Builds daily rows with **the same functions as training** (`ingest.hourly_series`, `target.daily_target`, `weather.daily_features`) and replaces those days in `targets.csv` and `weather_daily.csv`.
-4. Uploads both files to the DVC remote **by md5** (content-addressed, never overwritten), then writes `serving/current.json` **last**:
+4. Uploads both files to the DVC remote **by md5** (content-addressed, never overwritten), then writes the manifest (blob `capstone/serving/current.json`, not in the repo) **last**:
 ```json
    {"built_at": "...", "window": ["2026-10-07", "2026-10-17"],
     "base":  {"from": "pointer", "targets.csv": "85a15b41...", ...},
@@ -238,7 +315,7 @@ The refresh job is the only component that can write data.
 **Run it**
 ```powershell
 python -m src.refresh --dry-run                          # locally: data/ in, build/refresh/ out, nothing uploaded
-python scripts/deploy_refresh.py --image <registry>/itcs355@sha256:...   # create/update the job (digest only)
+python scripts/deploy_refresh.py --image <registry>.azurecr.io/itcs355@sha256:...   # create/update the job (digest only)
 python scripts/deploy_refresh.py --run-now --dry-run     # in the cloud: reads blob storage, uploads nothing
 python scripts/deploy_refresh.py --run-now               # one real refresh now
 python scripts/deploy_refresh.py --run-now --days 14     # re-fetch a longer window once (after an outage)
@@ -267,7 +344,7 @@ python scripts/deploy_refresh.py --run-now --days 14     # re-fetch a longer win
 1. Reads the serving manifest: the challenger trains on the same refreshed data the service uses. The md5 is checked inside the job and recorded as the run's data version.
 2. Submits an Azure ML job on the training cluster (`src/retrain.py`, same image and the same study-17 settings as v1, taken from `train_remote.py`). It fits **5 seeds** on all rows ending 7 days before the window.
 3. Scores production (the version in `config/production.json`, loaded from the registry like the service does) on **the same rows**: same data version, same feature code, same window rule. If the row counts differ, it refuses to compare.
-4. Applies the gate. **Pass:** registers the registered seed's model as `staging` with full lineage. **Fail:** registers nothing. Either way it writes `reports/retrain-<date>.md`, logs it to the MLflow run, and emits one `retrain` JSON event.
+4. Applies the gate. **Pass:** registers the model of the pre-fixed seed (20260101) as `staging` with full lineage. **Fail:** registers nothing. Either way it writes `reports/retrain-<date>.md`, logs it to the MLflow run, and emits one `retrain` JSON event.
 
 **The window.** The last 28 days. Neither model has seen them: the challenger stops 7 days before (the lag inputs reach back 7 days), and v1 stops in 2025-09. *Trade-off:* a 365-day window would always include a dry season, but then the challenger could only learn from the same data as v1, so retraining would be pointless for a year. So checks the window cannot judge are reported **n/a**, never faked:
 - no dry-season days → `mae_dry` is n/a;
@@ -288,9 +365,9 @@ python scripts/deploy_refresh.py --run-now --days 14     # re-fetch a longer win
 
 **Run it**
 ```powershell
-python scripts/retrain.py --image <registry>/itcs355@sha256:...        # from a laptop (clean commit)
+python scripts/retrain.py --image <registry>.azurecr.io/itcs355@sha256:...        # from a laptop (clean commit)
 python scripts/retrain.py --image ... --no-register                    # judge only
-python scripts/deploy_retrain.py --image <registry>/itcs355@sha256:...  # schedule (clean commit)
+python scripts/deploy_retrain.py --image <registry>.azurecr.io/itcs355@sha256:...  # schedule (clean commit)
 python scripts/deploy_retrain.py --run-now
 ```
 
@@ -309,8 +386,7 @@ Both models beat persistence, but v1 was better, and all 5 seeds of the challeng
 - In the rainy season the gate effectively judges MAE and false alarms only; dry-season checks apply from November.
 - A failed weekly run alerts nobody yet (same gap as the refresh job). Production is unaffected, because nothing changes without a pass and a PR.
 
-
-### Dashboard
+## Dashboard
 
 `python scripts/create_dashboard.py` creates (or updates) the Azure Monitor Workbook **PM2.5 forecast - operations**. The six tiles are defined in that script as KQL queries over the events the system already logs, so the dashboard is rebuilt from the repo, not clicked together:
 
@@ -324,3 +400,35 @@ Both models beat persistence, but v1 was better, and all 5 seeds of the challeng
 | Retraining | `retrain` | weekly gate decisions with challenger / production / persistence MAE |
 
 Not shown on purpose: the distribution of served forecasts. Logged predictions cover only stations someone called (mostly canary and load tests), so they would describe our testing, not Bangkok's air.
+
+
+## Known gaps
+
+- **No alert on a failed job execution** (refresh, monitor, retrain). A failed refresh is caught only indirectly, by `stale_data`, a day later. This is the most important open item (post-mortem action 6).
+- **`main` protection is defined but not enforced** (needs a paid or Student plan for private repositories).
+- **The refresh identity can write anywhere in its container.** An ABAC condition would restrict it to `capstone/serving/` (post-mortem action 8).
+- **No deploy-time freshness gate:** `deploy_service.py` does not refuse a revision whose data is already stale (post-mortem action 7).
+
+## Teardown
+
+Order matters: first what runs on a schedule, then what costs money, then the rest. Run `python scripts/cost_actual.py` a few days later to confirm the daily cost has dropped to about 0.
+
+```powershell
+# 1. stop everything scheduled
+az containerapp job delete -g <rg> -n itcs3556688020-refresh --yes
+az containerapp job delete -g <rg> -n itcs3556688020-monitor --yes
+az containerapp job delete -g <rg> -n itcs3556688020-retrain --yes
+az monitor scheduled-query delete -g <rg> -n pm25-monitor-finding --yes
+az monitor action-group delete -g <rg> -n pm25-oncall
+# 2. stop the fixed cost (the registry is 89% of the bill)
+az containerapp delete -g <rg> -n itcs3556688020-forecast --yes
+az acr delete -n itcs3556688020 --yes
+# 3. once grades are final: everything else (storage, workspace, Key Vault, identities)
+az group delete -n <rg> --yes
+```
+
+Keep step 3 until the course is graded: storage holds the data versions and the workspace holds the model lineage that the reports cite.
+
+- Deleting the registry also deletes the images the reports cite by digest; any of them can be rebuilt from its commit.
+- Key Vault is soft-deleted for 90 days after `az group delete` (its name stays reserved): `az keyvault purge -n itcs3556688020-kv` frees it.
+- The training cluster scales to 0 nodes when idle, so it costs nothing before step 3.
