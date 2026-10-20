@@ -2,8 +2,7 @@
 
 ITCS355 MLOps capstone · Bhornpailin Chunkasut (6688020)
 
-Forecasts each Bangkok air-quality station's PM2.5 for the day, published by 06:00. A batch
-job runs at 01:00 using the previous day's complete data; an API serves the forecasts.
+Forecasts each Bangkok air-quality station's PM2.5 for the next day. A daily job (06:30) brings in the previous day's complete data; the API computes forecasts on request from the latest data, with the same code as training.
 
 ## Data
 
