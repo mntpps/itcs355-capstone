@@ -1,0 +1,251 @@
+{
+  "resource_group": "itcs355-6688020",
+  "from": "2026-08-01",
+  "to": "2026-10-20",
+  "currency": "USD",
+  "total": 6.8537,
+  "by_service": [
+    {
+      "Cost": 0.05521622672265,
+      "ServiceName": "Azure Container Apps",
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.0627016129032258,
+      "ServiceName": "Azure Monitor",
+      "Currency": "USD"
+    },
+    {
+      "Cost": 3.132069940567e-06,
+      "ServiceName": "Bandwidth",
+      "Currency": "USD"
+    },
+    {
+      "Cost": 6.1066508622,
+      "ServiceName": "Container Registry",
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.001611,
+      "ServiceName": "Key Vault",
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.0,
+      "ServiceName": "Load Balancer",
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.0,
+      "ServiceName": "Log Analytics",
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.108784710005,
+      "ServiceName": "Storage",
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.43450869,
+      "ServiceName": "Virtual Machines",
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.0842694444444444,
+      "ServiceName": "Virtual Network",
+      "Currency": "USD"
+    }
+  ],
+  "by_day": [
+    {
+      "Cost": 0.0673557482,
+      "UsageDate": 20260913,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.1666013328,
+      "UsageDate": 20260914,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.1666013328,
+      "UsageDate": 20260915,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.1666013328,
+      "UsageDate": 20260916,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.278453028355556,
+      "UsageDate": 20260917,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.193291115911111,
+      "UsageDate": 20260918,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.192955065911111,
+      "UsageDate": 20260919,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.239192306577778,
+      "UsageDate": 20260920,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.274797677045536,
+      "UsageDate": 20260921,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.222632858355556,
+      "UsageDate": 20260922,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.2069936248,
+      "UsageDate": 20260923,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.223415723513294,
+      "UsageDate": 20260924,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.1666013328,
+      "UsageDate": 20260925,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.1666013328,
+      "UsageDate": 20260926,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.1666013328,
+      "UsageDate": 20260927,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.2040777168763,
+      "UsageDate": 20260928,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.18434957544635,
+      "UsageDate": 20260929,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.1666013328,
+      "UsageDate": 20260930,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.1666013328,
+      "UsageDate": 20261001,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.1666013328,
+      "UsageDate": 20261002,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.1666013328,
+      "UsageDate": 20261003,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.1666013328,
+      "UsageDate": 20261004,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.1666013328,
+      "UsageDate": 20261005,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.1666013328,
+      "UsageDate": 20261006,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.1666013328,
+      "UsageDate": 20261007,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.1666013328,
+      "UsageDate": 20261008,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.1666013328,
+      "UsageDate": 20261009,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.1666013328,
+      "UsageDate": 20261010,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.1666013328,
+      "UsageDate": 20261011,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.237153315688889,
+      "UsageDate": 20261012,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.1669301328,
+      "UsageDate": 20261013,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.1666188928,
+      "UsageDate": 20261014,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.1666124128,
+      "UsageDate": 20261015,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.17428705452043,
+      "UsageDate": 20261016,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.184560175385645,
+      "UsageDate": 20261017,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.240593579323298,
+      "UsageDate": 20261018,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.184525883767742,
+      "UsageDate": 20261019,
+      "Currency": "USD"
+    },
+    {
+      "Cost": 0.0461257998666667,
+      "UsageDate": 20261020,
+      "Currency": "USD"
+    }
+  ]
+}
