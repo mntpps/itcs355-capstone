@@ -228,3 +228,17 @@ Consequences:
   in Open-Meteo's forecast product? Test: compare each year's forecasts against reanalysis.
 - Decision: the model runs without weather. Weather stays a monitored input (drift signal)
   and returns as a candidate once three or more dry seasons exist.
+
+
+## Finding 9 — A station rarely disagrees with its neighbours for long; never for a day
+
+**Question:** can a sensor be wrong without being frozen, e.g. read 12 µg/m³ while the stations around it read 80? `stuck_sensor` (Finding 4) would not see it.
+
+**Method** (`explore/neighbour_thresholds.py`): for every station and hour, compare its value with the median of the stations within 10 km (at least 3 reporting). Count episodes where it stays below half or above twice that median, and at least 15 µg/m³ apart, for N hours in a row. 81 stations, 24,363 hours (Dec 2023 – Oct 2026, 33 months).
+
+**Result:**
+- 77 of 81 stations have at least 3 neighbours within 10 km; the other 4 cannot be judged this way.
+- Episodes of 6 h or more: 52 (1.6 a month); 12 h or more: 20 (0.6 a month), mostly one station reading *higher* than its neighbours (local sources: station 225593 alone has 9).
+- Episodes of 24 h or more: **none**, under all 18 rules tried. The longest was 22 h.
+
+**Rule:** `neighbour_disagreement` fires when a station has been below half or above twice its neighbour median, and at least 15 µg/m³ apart, for **24 h in a row**. Like Finding 4 (longest healthy run 7 h → rule 8 h): the longest healthy episode was 22 h → rule 24 h. Trade-off: a sensor that is wrong but not frozen is flagged after a day, not an hour.

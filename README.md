@@ -223,6 +223,7 @@ Thresholds reuse `src/checks.py`; each is tied to a finding in `docs/data-findin
 | `stale_data` | the data behind today's forecast is more than 1 day old (from `/ready`) | critical |
 | `feed_outage` | fewer than half the stations reported in the last 3 h (Finding 1) | critical |
 | `stuck_sensor` | a station's **latest** reading ends a run of ≥ 8 identical hours (Finding 4: longest healthy run 7 h) | warning |
+| `neighbour_disagreement` | a station has read below half or above twice the median of its neighbours within 10 km (at least 3 reporting), and at least 15 µg/m³ apart, for 24 h in a row (Finding 9: the longest such episode in 33 months was 22 h) | warning |
 | `service_unreachable` / `service_not_ready` | `/ready` cannot be reached, or does not return 200 | critical |
 | `model_vs_persistence` | the serving model's MAE over the last 14 days with known actuals is worse than persistence's (from `/performance`: the model backtests itself on every data reload) | warning |
 
@@ -406,8 +407,7 @@ Not shown on purpose: the distribution of served forecasts. Logged predictions c
 
 ### A station reads implausibly low, or loses data, in the dry season
 - **Missing data is handled today.** A station with no reading yesterday has no feature row, so `/predict` returns 404 instead of guessing (4 of 81 stations on Oct 16). If more than 20% of stations fail, the daily refresh publishes nothing and the old data keeps serving; fewer than half the stations reporting in 3 hours raises `feed_outage` (critical).
-- **A reading that is present but implausible is NOT caught today.** `stuck_sensor` catches a sensor that stops changing; it does not catch one that reads, say, 12 µg/m³ while its neighbours read 80.
-- **What I would add:** a `neighbour_disagreement` check in `src/monitor.py`: compare each station's latest value with the median of the stations within 10 km, and raise a warning when it stays far outside that range for several hours while at least 3 neighbours report. The exact limits would come from the history, the way Finding 4 set the 8-hour stuck rule.
+- **A reading that is present but implausible is caught by `neighbour_disagreement`** (added after the defence): every hour the monitor compares each station with the median of its neighbours within 10 km, and raises a warning when it has stayed below half or above twice that median, and at least 15 µg/m³ apart, for 24 h in a row. The 24 h comes from the history (Finding 9): in 33 months the longest such episode was 22 h, so a healthy station never triggers it. The 4 stations with fewer than 3 neighbours within 10 km cannot be judged this way.
 - **What the team does:** the alert arrives by email (below) → check the station on Air4Thai → if it is faulty, add it to an exclusion list in `config/` through a pull request, so the refresh and retraining skip it and `/predict` returns 404 for it instead of a wrong forecast → remove it when the station recovers.
 
 ### A broken sensor: how the data science team is told
@@ -451,7 +451,6 @@ The automated steps take under 30 minutes; the elapsed time is set by human revi
 - **No alert on a failed job execution** (refresh, monitor, retrain). A failed refresh is caught only indirectly, by `stale_data`, a day later. This is the most important open item (post-mortem action 6).
 - **The refresh identity can write anywhere in its container.** An ABAC condition would restrict it to `capstone/serving/` (post-mortem action 8).
 - **No deploy-time freshness gate:** `deploy_service.py` does not refuse a revision whose data is already stale (post-mortem action 7).
-- **No check for a station that disagrees with its neighbours** (a reading that is low or high but not frozen). Raised in the defence; design above.
 
 ## Teardown
 

@@ -64,6 +64,61 @@ def stuck_sensors(hourly: pd.DataFrame, now: pd.Timestamp, n: int = checks.STUCK
     return out
 
 
+def neighbours(stations: pd.DataFrame,
+               radius_km: float = checks.NEIGHBOUR_RADIUS_KM) -> dict[str, list[str]]:
+    """location_id -> the other stations within radius_km (stations: location_id, lat, lon)."""
+    ids = stations["location_id"].astype(str).to_numpy()
+    lat = np.radians(stations["lat"].to_numpy(float))
+    lon = np.radians(stations["lon"].to_numpy(float))
+    dy = (lat[:, None] - lat[None, :]) * 6371
+    dx = (lon[:, None] - lon[None, :]) * 6371 * np.cos((lat[:, None] + lat[None, :]) / 2)
+    near = np.hypot(dx, dy) <= radius_km
+    np.fill_diagonal(near, False)
+    return {ids[i]: list(ids[near[i]]) for i in range(len(ids))}
+
+
+def neighbour_disagreement(hourly: pd.DataFrame, now: pd.Timestamp, stations: pd.DataFrame,
+                           hours: int = checks.DISAGREE_HOURS,
+                           low: float = checks.DISAGREE_LOW, high: float = checks.DISAGREE_HIGH,
+                           min_gap: float = checks.DISAGREE_MIN_GAP,
+                           min_neighbours: int = checks.MIN_NEIGHBOURS,
+                           window: pd.Timedelta = REPORTING_WINDOW) -> list[Finding]:
+    """Stations whose readings have been far from the median of their neighbours for the
+    last `hours` hours in a row: a sensor that is wrong but not frozen (Finding 9).
+    Stations with fewer than `min_neighbours` reporting neighbours cannot be judged, and
+    stations that stopped reporting are feed_outage's job."""
+    if hourly.empty:
+        return []
+    wide = hourly.pivot_table(index="time", columns="location_id", values="pm25",
+                              aggfunc="mean").sort_index()
+    wide.columns = wide.columns.astype(str)
+    near = neighbours(stations)
+    out = []
+    for loc in wide.columns:
+        s = wide[loc].dropna()
+        if s.empty or now - s.index[-1] > window:
+            continue
+        nb = [n for n in near.get(loc, []) if n in wide.columns]
+        if len(nb) < min_neighbours:
+            continue
+        block = wide.loc[s.index, nb]
+        med = block.median(axis=1)
+        off = ((block.notna().sum(axis=1) >= min_neighbours)
+               & ((s < med * low) | (s > med * high))
+               & ((s - med).abs() >= min_gap))
+        trailing = int((~off[::-1]).cumsum().eq(0).sum())
+        if trailing < hours:
+            continue
+        value, median = float(s.iloc[-trailing:].mean()), float(med.iloc[-trailing:].mean())
+        side = "below" if value < median else "above"
+        out.append(Finding("neighbour_disagreement", "warning",
+                           f"station {loc} has read {side} its {len(nb)} neighbours for {trailing} h "
+                           f"(station {value:.1f}, neighbour median {median:.1f} ug/m3)",
+                           {"location_id": loc, "hours": trailing, "station_mean": round(value, 1),
+                            "neighbour_median": round(median, 1), "neighbours": len(nb)}))
+    return out
+
+
 def model_vs_persistence(y, pred, yesterday, tolerance: float = 1.0,
                          min_days: int = MIN_DAYS_FOR_PERFORMANCE) -> list[Finding]:
     """Recent forecasts scored against what actually happened: is the model still
