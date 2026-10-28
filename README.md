@@ -210,7 +210,7 @@ The job token is read-only (`permissions: contents: read`).
 - PR #3 — a private key committed: **secret-scan failed**. A first attempt with an obviously fake key ("demo", "fake") was *not* flagged — gitleaks ignores placeholders — so the test was redone with a real-format throwaway key that was never registered anywhere. A check is only trusted after it has been seen to fail.
 - PR #4 — `shrink` not passed to `forecast.predict`: **lint-test failed** (3 tests), build skipped.
 
-**Enforcement:** ruleset `protect-main` requires a PR and all three checks, with no bypass. GitHub enforces rulesets on private repositories only on paid plans, so enforcement is pending the GitHub Student Developer Pack; until then the rule is followed by practice.
+**Enforcement:** ruleset `protect-main` requires a PR and all three checks, with no bypass, and is enforced (GitHub Student Developer Pack, since 2026-10-24).
 
 ## Monitoring
 
@@ -402,12 +402,56 @@ Both models beat persistence, but v1 was better, and all 5 seeds of the challeng
 Not shown on purpose: the distribution of served forecasts. Logged predictions cover only stations someone called (mostly canary and load tests), so they would describe our testing, not Bangkok's air.
 
 
+## Questions from the defence (2026-10-24)
+
+### A station reads implausibly low, or loses data, in the dry season
+- **Missing data is handled today.** A station with no reading yesterday has no feature row, so `/predict` returns 404 instead of guessing (4 of 81 stations on Oct 16). If more than 20% of stations fail, the daily refresh publishes nothing and the old data keeps serving; fewer than half the stations reporting in 3 hours raises `feed_outage` (critical).
+- **A reading that is present but implausible is NOT caught today.** `stuck_sensor` catches a sensor that stops changing; it does not catch one that reads, say, 12 µg/m³ while its neighbours read 80.
+- **What I would add:** a `neighbour_disagreement` check in `src/monitor.py`: compare each station's latest value with the median of the stations within 10 km, and raise a warning when it stays far outside that range for several hours while at least 3 neighbours report. The exact limits would come from the history, the way Finding 4 set the 8-hour stuck rule.
+- **What the team does:** the alert arrives by email (below) → check the station on Air4Thai → if it is faulty, add it to an exclusion list in `config/` through a pull request, so the refresh and retraining skip it and `/predict` returns 404 for it instead of a wrong forecast → remove it when the station recovers.
+
+### A broken sensor: how the data science team is told
+`stuck_sensor` (8 or more identical hours) → one JSON finding → Log Analytics → alert rule `pm25-monitor-finding` (every 15 min, split by check, severity and mode) → action group `pm25-oncall` → email. Measured: about 15 minutes from finding to email. Reaching a whole team is a settings change, not a code change: add their addresses, or a Teams or Slack webhook, to the action group.
+
+### Cost of one training run
+| Run | Where | Time | Cost |
+|---|---|---|---|
+| One fit of study-17 | laptop | about 1 min | 0 |
+| Weekly retrain (5 seeds + scoring production) | Azure ML training cluster | about 10 min | about 0.06 USD (≈ 0.25 USD a month) |
+
+The cluster scales to 0 nodes when idle, so training has no fixed cost.
+
+### Serving cost by scenario: someone uses the API for 30 minutes
+Retail prices, Container Apps Consumption, southeastasia, one replica of 0.5 vCPU and 1 GiB: **active** 0.000021 USD per second, **idle** 0.000006 USD per second, requests 0.40 USD per million. Before the monthly free grant (180,000 vCPU-seconds, 360,000 GiB-seconds and 2 million requests).
+
+| Scenario | What happens | The 30 minutes | Per day | Per month |
+|---|---|---|---|---|
+| **Cold** (scale to zero, our setting) | the first request waits 20–40 s while the model loads; 30 min active + 5 min cooldown, then back to 0 | 0.044 USD | 0.044 USD (one session) | ≈ 0, inside the free grant |
+| **Warm** (`minReplicas 1`) | no wait; but the replica also idles the other 23.5 hours | 0.038 USD | 0.55 USD | ≈ 16.50 USD |
+| **Steady** (busy 24/7, one active replica) | always serving | 0.038 USD | 1.81 USD | ≈ 54 USD |
+
+1,000 predictions add about 0.0004 USD in request charges. The whole system costs about 6 USD a month, almost all of it the registry (below).
+
+### Why is the container registry the most expensive? Does it include the email alerts?
+The Basic registry is a fixed daily fee for the registry existing, used or not: 6.12 of the 6.87 USD (Sep 13 – Oct 20), about 0.16 USD a day. Everything else scales to zero or fits in a free tier, so the fixed fee dominates. The alerts are **not** in it: the alert rule is billed under Azure Monitor (0.06 USD in total), and alert emails are free up to 1,000 a month. Teardown deletes the registry first for this reason.
+
+### How long from a new model to production?
+| Step | Who | Time |
+|---|---|---|
+| Weekly retrain registers a `staging` model (only if it passes the gate) | automatic, Sunday 07:30 | about 10 min |
+| `promote.py` → pull request → CI (3 checks) | data scientist + CI | about 10 min |
+| Review and merge | a second person | the main wait |
+| Build image → canary at 20% → promote by rule | `deploy_service.py`, `canary.py` | about 15 min |
+
+The automated steps take under 30 minutes; the elapsed time is set by human review. Target: a staging model is live within 2 working days.
+
+
 ## Known gaps
 
 - **No alert on a failed job execution** (refresh, monitor, retrain). A failed refresh is caught only indirectly, by `stale_data`, a day later. This is the most important open item (post-mortem action 6).
-- **`main` protection is defined but not enforced** (needs a paid or Student plan for private repositories).
 - **The refresh identity can write anywhere in its container.** An ABAC condition would restrict it to `capstone/serving/` (post-mortem action 8).
 - **No deploy-time freshness gate:** `deploy_service.py` does not refuse a revision whose data is already stale (post-mortem action 7).
+- **No check for a station that disagrees with its neighbours** (a reading that is low or high but not frozen). Raised in the defence; design above.
 
 ## Teardown
 
