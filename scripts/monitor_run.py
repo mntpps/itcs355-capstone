@@ -99,7 +99,9 @@ def main() -> int:
         mode = "live"
         now = pd.Timestamp.now(tz=TZ).floor("h")
         hourly, expected = fetch_recent(now)
-        findings = monitor.feed_outage(hourly, now, expected) + monitor.stuck_sensors(hourly, now)
+        stations = pd.read_csv(REPO_ROOT / "config" / "stations.csv")
+        findings = (monitor.feed_outage(hourly, now, expected) + monitor.stuck_sensors(hourly, now)
+                    + monitor.neighbour_disagreement(hourly, now, stations))
         if os.environ.get("SERVICE_URL"):
             findings += service_findings(os.environ["SERVICE_URL"])
 
